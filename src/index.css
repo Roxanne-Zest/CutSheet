@@ -154,6 +154,33 @@ section > h2 {
   border-radius: 1px;
   display: block;
 }
+.layout-thumb .slot-count {
+  position: absolute;
+  right: 1px;
+  bottom: 0;
+  font-size: 8px;
+  font-weight: 700;
+  font-style: normal;
+  color: #6a707a;
+  padding: 0 2px;
+}
+
+/* Change mode re-flows the spread you are on, so it is visibly not the default. */
+.layouts.changing .layout-btn { border-color: #6a4a2a; }
+.layouts.changing .layout-btn:hover:not(:disabled) { border-color: var(--accent); }
+
+.seg button.warn { border-color: var(--accent); color: var(--accent); }
+
+.confirm {
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  padding: 10px;
+  margin-top: 10px;
+  background: #2a2318;
+  font-size: 12px;
+}
+.confirm b { display: block; margin-bottom: 4px; }
+.confirm p { margin: 0 0 8px; color: var(--muted); line-height: 1.45; }
 
 /* ---------- photo tray ---------- */
 

@@ -18,17 +18,30 @@ export type Slot = {
   shape: SlotShape;
 };
 
-export type Format = {
+export type JournalFormat = {
   id: string;
   name: string;
-  w_mm: number;
-  h_mm: number;
+  page_w_mm: number;
+  page_h_mm: number;
+  margin_mm: number;
 };
+
+export type TemplateTag =
+  | "hero"        // one dominant image
+  | "grid"        // regular rows and columns
+  | "strip"       // filmstrip / repeated band
+  | "editorial"   // tall, asymmetric, generous whitespace
+  | "collage"     // overlapping or rotated, scrapbook feel
+  | "writing"     // leaves deliberate space for text
+  | "seasonal";   // works well for a dated/event spread
 
 export type Template = {
   id: string;
   formatId: string;
   name: string;
+  /** Why you'd reach for this one. Shown on hover in the picker. */
+  note: string;
+  tags: TemplateTag[];
   slots: Slot[];
 };
 

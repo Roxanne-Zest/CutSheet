@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import type { PrintItem, Project } from "../types";
 import { DEFAULT_SETTINGS } from "../types";
-import { TEMPLATES, templateById } from "../data/layouts";
+import { TEMPLATES, templateById } from "../data/templates";
 import { buildPrintItems } from "./printItems";
 import { fillCrop } from "./geometry";
 import { generatePdf } from "./pdf";
@@ -184,12 +184,12 @@ describe("S7 — layout plan", () => {
   };
 
   it("comes first and shows each spread at actual size", async () => {
-    const project = projectWith("a5__4-grid");
+    const project = projectWith("a5-4-grid");
     const items = buildPrintItems(project);
     const { pages } = await run(project, items);
 
     const plan = pages[0];
-    const template = templateById("a5__4-grid")!;
+    const template = templateById("a5-4-grid")!;
     // Every slot appears at its true millimetre size on the plan.
     for (const slot of template.slots) {
       const found = plan.images.find(
@@ -201,14 +201,14 @@ describe("S7 — layout plan", () => {
   });
 
   it("page count is plan pages plus sheets", async () => {
-    const project = projectWith("a5__4-grid");
+    const project = projectWith("a5-4-grid");
     const items = buildPrintItems(project);
     const { res, pages } = await run(project, items);
     expect(pages.length).toBe(1 + res.sheets);
   });
 
   it("plan IDs match the sheet IDs", async () => {
-    const project = projectWith("passport-tn__6-grid");
+    const project = projectWith("a6-6-grid");
     const items = buildPrintItems(project);
     const { pages } = await run(project, items);
 
@@ -223,7 +223,7 @@ describe("S7 — layout plan", () => {
   });
 
   it("spans multiple plan pages when the spreads do not fit on one", async () => {
-    const t = templateById("hobonichi-cousin__hero")!;
+    const t = templateById("hc-hero")!;
     const project = emptyProject({
       formatId: t.formatId,
       spreads: Array.from({ length: 4 }, (_, i) => ({
