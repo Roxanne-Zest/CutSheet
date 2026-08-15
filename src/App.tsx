@@ -9,8 +9,12 @@ import type {
   Spread,
 } from "./types";
 import { DEFAULT_SETTINGS } from "./types";
-import { FORMATS, formatById } from "./data/formats";
-import { templateById, templatesForFormat } from "./data/layouts";
+import {
+  FORMATS,
+  formatById,
+  templateById,
+  templatesForFormat,
+} from "./data/templates";
 import {
   addQuarter,
   fillCrop,
@@ -20,6 +24,7 @@ import {
 } from "./lib/geometry";
 import type { CropContext } from "./lib/geometry";
 import { buildPrintItems, resolveShape } from "./lib/printItems";
+import { dropCount, formatChangeDrops, remapTemplate } from "./lib/layoutChange";
 import { generatePdf, packProject } from "./lib/pdf";
 import { loadSource, readImageSize } from "./lib/raster";
 import type { Source } from "./lib/raster";
@@ -61,6 +66,11 @@ const cropContextFor = (
   };
 };
 
+/** A layout or format change that would discard photos, held for confirmation. */
+type PendingChange =
+  | { kind: "template"; templateId: string; name: string; drops: number }
+  | { kind: "format"; formatId: string; name: string; drops: number };
+
 export default function App() {
   const [project, setProject] = useState<Project | null>(null);
   const [assets, setAssets] = useState<Asset[]>([]);
@@ -72,6 +82,13 @@ export default function App() {
     null,
   );
   const [error, setError] = useState<string | null>(null);
+  /**
+   * Picking a layout adds a spread unless you have deliberately switched to
+   * change mode. Re-flowing a spread can throw photos away, so it is never
+   * the thing a stray click does.
+   */
+  const [galleryMode, setGalleryMode] = useState<"add" | "change">("add");
+  const [pending, setPending] = useState<PendingChange | null>(null);
   const saveTimer = useRef<number | null>(null);
 
   // ---- load
@@ -167,6 +184,12 @@ export default function App() {
     if (dirty) setProject({ ...project, spreads });
   }, [project, dims]);
 
+  // Change mode is deliberate and transient — never carried to another spread.
+  useEffect(() => {
+    setGalleryMode("add");
+    setPending(null);
+  }, [spreadId]);
+
   const items = useMemo(() => (project ? buildPrintItems(project) : []), [project]);
 
   const packed = useMemo(
@@ -234,7 +257,8 @@ export default function App() {
     setSlotId(null);
   };
 
-  const setSpreadTemplate = (templateId: string) => {
+  /** Re-flow the current spread. Only reachable from change mode. */
+  const applySpreadTemplate = (templateId: string) => {
     if (!spread) return;
     const next = templateById(templateId);
     if (!next) return;
@@ -245,6 +269,21 @@ export default function App() {
       placements: s.placements.filter((p) => next.slots.some((x) => x.id === p.slotId)),
     }));
     setSlotId(null);
+    setPending(null);
+    setGalleryMode("add");
+  };
+
+  /** Change mode: ask first if photos would be discarded, otherwise just do it. */
+  const requestSpreadTemplate = (templateId: string) => {
+    if (!spread) return;
+    const next = templateById(templateId);
+    if (!next || next.id === spread.templateId) return;
+    const drops = dropCount(spread.placements, next);
+    if (drops > 0) {
+      setPending({ kind: "template", templateId, name: next.name, drops });
+      return;
+    }
+    applySpreadTemplate(templateId);
   };
 
   const removeSpread = (id: string) => {
@@ -252,13 +291,13 @@ export default function App() {
     if (spreadId === id) setSpreadId(null);
   };
 
-  const changeFormat = (formatId: string) => {
+  const applyFormat = (formatId: string) => {
     setProject((p) => {
       if (!p) return p;
-      // Carry each spread across to the same layout in the new format.
+      // Carry each spread to the closest layout the new format offers.
       const spreads = p.spreads.map((s) => {
-        const key = s.templateId.split("__")[1];
-        const target = templateById(`${formatId}__${key}`);
+        const current = templateById(s.templateId);
+        const target = current ? remapTemplate(current, formatId) : undefined;
         if (!target) return s;
         return {
           ...s,
@@ -271,6 +310,23 @@ export default function App() {
       return { ...p, formatId, spreads };
     });
     setSlotId(null);
+    setPending(null);
+    setGalleryMode("add");
+  };
+
+  const requestFormat = (formatId: string) => {
+    if (!project || formatId === project.formatId) return;
+    const drops = formatChangeDrops(project.spreads, formatId, templateById);
+    if (drops > 0) {
+      setPending({
+        kind: "format",
+        formatId,
+        name: formatById(formatId)?.name ?? formatId,
+        drops,
+      });
+      return;
+    }
+    applyFormat(formatId);
   };
 
   const placeAsset = (targetSlotId: string, targetAssetId: string) => {
@@ -418,7 +474,7 @@ export default function App() {
   const selectedSize = selectedPlacement ? dims.get(selectedPlacement.assetId) : undefined;
 
   // The stage scales the spread up to a comfortable size without going silly.
-  const stageScale = Math.min(3.2, Math.max(1.4, 620 / format.h_mm));
+  const stageScale = Math.min(3.2, Math.max(1.4, 620 / format.page_h_mm));
 
   return (
     <div className="app">
@@ -450,36 +506,97 @@ export default function App() {
       <aside className="rail">
         <section>
           <h2>Journal format</h2>
-          <select value={project.formatId} onChange={(e) => changeFormat(e.target.value)}>
+          <select value={project.formatId} onChange={(e) => requestFormat(e.target.value)}>
             {FORMATS.map((f) => (
               <option key={f.id} value={f.id}>
-                {f.name} — {f.w_mm} x {f.h_mm} mm
+                {f.name} — {f.page_w_mm} x {f.page_h_mm} mm
               </option>
             ))}
           </select>
         </section>
 
         <section>
-          <h2>{spread ? "Layout" : "Add a spread"}</h2>
+          <h2>Layout</h2>
+
+          {spread && (
+            <div className="seg" style={{ marginBottom: 8 }}>
+              <button
+                className={galleryMode === "add" ? "active" : ""}
+                onClick={() => {
+                  setGalleryMode("add");
+                  setPending(null);
+                }}
+                title="Picking a layout starts a new spread"
+              >
+                Add spread
+              </button>
+              <button
+                className={galleryMode === "change" ? "active warn" : ""}
+                onClick={() => setGalleryMode("change")}
+                title="Picking a layout re-flows the spread you are on"
+              >
+                Change spread {project.spreads.indexOf(spread) + 1}
+              </button>
+            </div>
+          )}
+
           <LayoutGallery
             templates={templates}
             format={format}
-            activeId={spread?.templateId}
-            onPick={(id) => (spread ? setSpreadTemplate(id) : addSpread(id))}
+            activeId={galleryMode === "change" ? spread?.templateId : undefined}
+            mode={spread ? galleryMode : "add"}
+            onPick={(id) =>
+              spread && galleryMode === "change"
+                ? requestSpreadTemplate(id)
+                : addSpread(id)
+            }
           />
-          <p className="hint">
-            {spread
-              ? "Picking a layout re-flows this spread."
-              : "Pick a layout to start your first spread."}
-          </p>
-          {spread && (
-            <button
-              style={{ width: "100%", marginTop: 8 }}
-              onClick={() => addSpread(spread.templateId)}
-            >
-              + Add another spread
-            </button>
+
+          {pending && (
+            <div className="confirm">
+              <b>
+                {pending.kind === "template"
+                  ? `Change to ${pending.name}?`
+                  : `Switch to ${pending.name}?`}
+              </b>
+              <p>
+                {pending.kind === "template"
+                  ? `That layout has fewer slots, so ${pending.drops} photo${
+                      pending.drops === 1 ? "" : "s"
+                    } would be removed from this spread.`
+                  : `The closest layouts in that format are smaller, so ${
+                      pending.drops
+                    } photo${pending.drops === 1 ? "" : "s"} would be removed.`}
+                {" "}
+                Adding a spread instead keeps everything.
+              </p>
+              <div className="row">
+                <button
+                  className="grow danger"
+                  onClick={() =>
+                    pending.kind === "template"
+                      ? applySpreadTemplate(pending.templateId)
+                      : applyFormat(pending.formatId)
+                  }
+                >
+                  Remove {pending.drops} and change
+                </button>
+                <button className="grow" onClick={() => setPending(null)}>
+                  Cancel
+                </button>
+              </div>
+            </div>
           )}
+
+          <p className="hint">
+            {!spread
+              ? "Pick a layout to start your first spread."
+              : galleryMode === "add"
+                ? "Picking a layout adds a new spread. Your current spread is untouched."
+                : "Picking a layout re-flows spread " +
+                  (project.spreads.indexOf(spread) + 1) +
+                  ". Photos with no slot to land in are removed."}
+          </p>
         </section>
 
         <section>
@@ -529,7 +646,7 @@ export default function App() {
                 <span className="spread-meta">
                   Spread {project.spreads.indexOf(spread) + 1} of {project.spreads.length}
                   {" · "}
-                  {format.name} {format.w_mm} x {format.h_mm} mm · {template.name} ·{" "}
+                  {format.name} {format.page_w_mm} x {format.page_h_mm} mm · {template.name} ·{" "}
                   {template.slots.length} slot{template.slots.length === 1 ? "" : "s"}
                 </span>
                 <button

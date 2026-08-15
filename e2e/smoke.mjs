@@ -72,11 +72,11 @@ const run = async () => {
   await page.waitForSelector(".layouts button");
 
   // ---- pick a layout
-  await page.click('.layouts button:has-text("4 grid")');
-  await page.waitForSelector(".spread .slot");
-  const slotCount = await page.locator(".spread .slot").count();
-  if (slotCount === 4) pass(`4 grid renders ${slotCount} slots`);
-  else fail(`4 grid rendered ${slotCount} slots, expected 4`);
+  await page.click('.layouts button:has-text("Four grid")');
+  await page.waitForSelector(".spread-wrap .spread .slot");
+  const slotCount = await page.locator(".spread-wrap .spread .slot").count();
+  if (slotCount === 4) pass(`Four grid renders ${slotCount} slots`);
+  else fail(`Four grid rendered ${slotCount} slots, expected 4`);
 
   // ---- add photos of varied aspect ratios
   const files = [];
@@ -99,15 +99,15 @@ const run = async () => {
   // ---- place one photo per slot, via select-then-click
   for (let i = 0; i < 4; i++) {
     await page.locator(".chip").nth(i).click();
-    await page.locator(".spread .slot").nth(i).click();
+    await page.locator(".spread-wrap .spread .slot").nth(i).click();
   }
   await page.waitForFunction(
-    () => document.querySelectorAll(".spread .slot canvas").length === 4,
+    () => document.querySelectorAll(".spread-wrap .spread .slot canvas").length === 4,
   );
   pass("crop-to-fill placed a photo of every aspect ratio into its slot");
 
   // ---- exercise the editor controls on the selected slot
-  await page.locator(".spread .slot").nth(3).click();
+  await page.locator(".spread-wrap .spread .slot").nth(3).click();
   await page.waitForSelector(".rail.right .quality");
   await page.locator('.rail.right button[title="Rotate right"]').click();
   const straighten = page.locator('.rail.right input[type="range"]').nth(1);
@@ -120,8 +120,8 @@ const run = async () => {
   // ---- everything lives in IndexedDB, so it must survive a reload
   await page.waitForTimeout(800); // let the autosave debounce land
   await page.reload({ waitUntil: "networkidle" });
-  await page.waitForSelector(".spread .slot canvas");
-  const afterReload = await page.locator(".spread .slot canvas").count();
+  await page.waitForSelector(".spread-wrap .spread .slot canvas");
+  const afterReload = await page.locator(".spread-wrap .spread .slot canvas").count();
   const chipsAfter = await page.locator(".chip").count();
   if (afterReload === 4 && chipsAfter === 4) {
     pass("project and photos reloaded from IndexedDB intact");
@@ -129,15 +129,43 @@ const run = async () => {
     fail(`after reload: ${afterReload} filled slots, ${chipsAfter} photos, expected 4 and 4`);
   }
 
-  // ---- a second spread, so the plan page has more than one
-  await page.click('button:has-text("+ Add another spread")');
-  await page.click('.layouts button:has-text("Polaroid cluster")');
+  // ---- picking a layout must ADD a spread, never re-flow the one you are on
+  await page.click('.layouts button:has-text("Collage scatter")');
+  await page.waitForSelector(".strip-item");
+  const spreadCount = await page.locator(".strip-item").count();
+  if (spreadCount === 2) pass("picking a layout adds a spread, it does not re-flow the current one");
+  else fail(`expected 2 spreads after picking a layout, got ${spreadCount}`);
+
+  await page.locator(".strip-item").first().click();
+  await page.waitForSelector(".spread-wrap .spread .slot canvas");
+  const kept = await page.locator(".spread-wrap .spread .slot canvas").count();
+  if (kept === 4) pass("the original spread kept all four photos");
+  else fail(`original spread lost photos: ${kept} of 4 remain`);
+
+  // ---- re-flowing to a smaller layout is deliberate, and asks first
+  await page.click('.rail .seg button:has-text("Change spread 1")');
+  await page.click('.layouts button:has-text("Two stacked")');
+  await page.waitForSelector(".confirm");
+  const warning = (await page.locator(".confirm").innerText()).replace(/\s+/g, " ");
+  if (/2 photos would be removed/.test(warning)) {
+    pass("changing to a smaller layout warns before discarding photos");
+  } else {
+    fail(`confirm text did not name the loss: ${warning}`);
+  }
+
+  await page.click('.confirm button:has-text("Cancel")');
+  const afterCancel = await page.locator(".spread-wrap .spread .slot canvas").count();
+  if (afterCancel === 4) pass("cancelling the change leaves every photo in place");
+  else fail(`cancel lost photos: ${afterCancel} of 4 remain`);
+
+  // ---- put a photo on the second spread so the plan has two populated spreads
+  await page.locator(".strip-item").nth(1).click();
   await page.locator(".chip").nth(0).click();
-  await page.locator(".spread .slot").nth(0).click();
-  pass("second spread added with a tilted layout");
+  await page.locator(".spread-wrap .spread .slot").nth(0).click();
+  pass("second spread filled with a tilted collage layout");
 
   // ---- a curved shape, so the cut guides get exercised alongside rotation
-  await page.locator(".spread .slot").nth(0).click();
+  await page.locator(".spread-wrap .spread .slot").nth(0).click();
   await page.locator('.rail.right button:has-text("Arch")').click();
   pass("arch shape applied to a slot");
 

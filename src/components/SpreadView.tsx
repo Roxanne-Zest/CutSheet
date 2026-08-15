@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import type { Format, Placement, Slot, Spread, Template } from "../types";
+import type { JournalFormat, Placement, Slot, Spread, Template } from "../types";
 import type { Source } from "../lib/raster";
 import { orientedSize, panBy, zoomBy } from "../lib/geometry";
 import type { CropContext } from "../lib/geometry";
@@ -14,7 +14,7 @@ import { SlotCanvas } from "./SlotCanvas";
 export type SpreadViewProps = {
   spread: Spread;
   template: Template;
-  format: Format;
+  format: JournalFormat;
   scale: number;
   sources: Map<string, Source>;
   selectedSlotId: string | null;
@@ -62,7 +62,7 @@ export function SpreadView(props: SpreadViewProps) {
   return (
     <div
       className="spread"
-      style={{ width: format.w_mm * scale, height: format.h_mm * scale }}
+      style={{ width: format.page_w_mm * scale, height: format.page_h_mm * scale }}
     >
       {template.slots.map((slot) => {
         const placement = spread.placements.find((p) => p.slotId === slot.id);

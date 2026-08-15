@@ -6,8 +6,7 @@ import {
 } from "pdf-lib";
 import type { PDFFont, PDFImage, PDFPage } from "pdf-lib";
 import type { PrintItem, Project, SheetPlacement, Slot } from "../types";
-import { templateById } from "../data/layouts";
-import { formatById } from "../data/formats";
+import { formatById, templateById } from "../data/templates";
 import { A4, mmToPt } from "./units";
 import { contentArea, defaultPackOptions, pack, toPackUnits } from "./packer";
 import type { PackOptions, PackResult } from "./packer";
@@ -392,7 +391,7 @@ export const generatePdf = async (o: GenerateOptions): Promise<GenerateResult> =
     .map((s) => {
       const t = templateById(s.templateId);
       const f = t ? formatById(t.formatId) : undefined;
-      return t && f ? { itemId: s.id, copy: 1, w_mm: f.w_mm, h_mm: f.h_mm } : null;
+      return t && f ? { itemId: s.id, copy: 1, w_mm: f.page_w_mm, h_mm: f.page_h_mm } : null;
     })
     .filter((x): x is NonNullable<typeof x> => x !== null);
 
@@ -432,14 +431,14 @@ export const generatePdf = async (o: GenerateOptions): Promise<GenerateResult> =
 
       const idx = project.spreads.indexOf(spread) + 1;
       d.text(
-        `Spread ${idx} · ${fmt.name} · ${template.name} · ${fmt.w_mm} x ${fmt.h_mm} mm`,
+        `Spread ${idx} · ${fmt.name} · ${template.name} · ${fmt.page_w_mm} x ${fmt.page_h_mm} mm`,
         p.x_mm,
         p.y_mm - 1.8,
         font,
         6.5,
         MUTED,
       );
-      d.path(rectSvgPath(p.x_mm, p.y_mm, fmt.w_mm, fmt.h_mm), INK, 0.6);
+      d.path(rectSvgPath(p.x_mm, p.y_mm, fmt.page_w_mm, fmt.page_h_mm), INK, 0.6);
 
       for (const slot of template.slots) {
         const item = items.find(

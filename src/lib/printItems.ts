@@ -8,7 +8,7 @@ import type {
   Spread,
   Template,
 } from "../types";
-import { templateById } from "../data/layouts";
+import { templateById } from "../data/templates";
 
 /**
  * The shape actually cut: a per-slot override wins, then the project's corner
