@@ -23,6 +23,8 @@ export type PackOptions = {
   footer_mm: number;
   gap_mm: number;
   allowRotate: boolean;
+  /** Top margin, when it differs from the side margin (the plan page's header). */
+  top_mm?: number;
 };
 
 export const defaultPackOptions = (
@@ -55,12 +57,15 @@ export type PackResult = {
   area: ContentArea;
 };
 
-export const contentArea = (o: PackOptions): ContentArea => ({
-  x: o.margin_mm,
-  y: o.margin_mm,
-  w: o.sheetW_mm - 2 * o.margin_mm,
-  h: o.sheetH_mm - o.margin_mm - o.footer_mm,
-});
+export const contentArea = (o: PackOptions): ContentArea => {
+  const top = o.top_mm ?? o.margin_mm;
+  return {
+    x: o.margin_mm,
+    y: top,
+    w: o.sheetW_mm - 2 * o.margin_mm,
+    h: o.sheetH_mm - top - o.footer_mm,
+  };
+};
 
 /** Expand every PrintItem into one pack unit per copy. */
 export const toPackUnits = (items: PrintItem[]): PackUnit[] => {

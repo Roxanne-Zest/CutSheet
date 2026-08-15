@@ -33,6 +33,8 @@ const HAIRLINE = rgb(0.62, 0.64, 0.67);
 const GUIDE = rgb(0.55, 0.35, 0.75);
 
 const PLAN_MARGIN_MM = 10;
+/** Clear of the plan's title block, and of each spread's own caption above it. */
+const PLAN_TOP_MM = 28;
 const PLAN_FOOTER_MM = 22;
 const PLAN_GAP_MM = 10;
 
@@ -300,7 +302,7 @@ const drawPlanSlot = (
     d.image(thumb, x, y, slot.w_mm, slot.h_mm, slot.rotation_deg);
   }
   d.path(
-    shapeSvgPath(slot.shape, x, y, slot.w_mm, slot.h_mm, slot.rotation_deg),
+    shapeSvgPath(item?.shape ?? slot.shape, x, y, slot.w_mm, slot.h_mm, slot.rotation_deg),
     thumb ? HAIRLINE : MUTED,
     0.4,
     thumb ? undefined : [2, 2],
@@ -398,6 +400,7 @@ export const generatePdf = async (o: GenerateOptions): Promise<GenerateResult> =
     sheetW_mm: A4.w_mm,
     sheetH_mm: A4.h_mm,
     margin_mm: PLAN_MARGIN_MM,
+    top_mm: PLAN_TOP_MM,
     footer_mm: PLAN_FOOTER_MM,
     gap_mm: PLAN_GAP_MM,
     allowRotate: false,

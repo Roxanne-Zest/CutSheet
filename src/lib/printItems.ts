@@ -1,5 +1,28 @@
-import type { PrintItem, Project, Spread, Template } from "../types";
+import type {
+  OutputSettings,
+  Placement,
+  PrintItem,
+  Project,
+  Slot,
+  SlotShape,
+  Spread,
+  Template,
+} from "../types";
 import { templateById } from "../data/layouts";
+
+/**
+ * The shape actually cut: a per-slot override wins, then the project's corner
+ * style, then whatever the template seeded.
+ */
+export const resolveShape = (
+  slot: Slot,
+  placement: Placement | undefined,
+  settings: OutputSettings,
+): SlotShape => {
+  if (placement?.shape) return placement.shape;
+  if (settings.cornerStyle === "rounded" && slot.shape === "rect") return "rounded";
+  return slot.shape;
+};
 
 /**
  * Spreads in, one flat PrintItem list out.
@@ -31,7 +54,7 @@ export const buildPrintItems = (project: Project): PrintItem[] => {
         straighten_deg: p.straighten_deg,
         w_mm: slot.w_mm,
         h_mm: slot.h_mm,
-        shape: slot.shape,
+        shape: resolveShape(slot, p, project.settings),
         fromSpread: spread.id,
         fromSlot: slot.id,
         copies: p.copies ?? 1,

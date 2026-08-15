@@ -49,6 +49,8 @@ export type Placement = {
    */
   straighten_deg: number;
   copies: 1 | 2 | 3 | 4;
+  /** Per-slot shape override. Falls back to the template slot's own shape. */
+  shape?: SlotShape;
 };
 
 export type Spread = {
@@ -107,6 +109,12 @@ export type OutputSettings = {
   idLabels: boolean;
   shapeGuides: boolean;
   bleed_mm: number;
+  /**
+   * Open question in the spec: rounded corners look better in journals, but
+   * square is what a guillotine gives you for free. Left square by default and
+   * switchable per project rather than decided in the seed data.
+   */
+  cornerStyle: "square" | "rounded";
 };
 
 export type Project = {
@@ -125,4 +133,5 @@ export const DEFAULT_SETTINGS: OutputSettings = {
   idLabels: true,
   shapeGuides: true,
   bleed_mm: 0,
+  cornerStyle: "square",
 };
