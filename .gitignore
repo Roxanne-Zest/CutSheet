@@ -23,5 +23,13 @@ dist-ssr
 *.sln
 *.sw?
 
+# Environment / secrets
+.env
+.env.local
+.env.*.local
+
+# Netlify
+.netlify/
+
 # e2e artefacts
 e2e-out
