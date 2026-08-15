@@ -230,9 +230,7 @@ section > h2 {
   outline: 1px solid rgba(0, 0, 0, 0.14);
   cursor: pointer;
 }
-.slot.rounded { border-radius: 9%; }
-.slot.circle { border-radius: 50%; }
-.slot.arch { border-radius: 50% 50% 0 0 / 40% 40% 0 0; }
+/* Shape radii are set inline, in px, to match the cut guide in the PDF. */
 .slot.selected { outline: 2px solid var(--accent); outline-offset: 0; z-index: 3; }
 .slot.over { outline: 2px dashed var(--accent); }
 .slot canvas { display: block; width: 100%; height: 100%; }

@@ -527,14 +527,19 @@ export const generatePdf = async (o: GenerateOptions): Promise<GenerateResult> =
     if (shapeGuides) {
       for (const b of boxes) {
         if (b.item.shape === "rect") continue;
-        const rot = b.placement.rotated ? 90 : 0;
-        const fw = b.placement.rotated ? b.item.h_mm : b.item.w_mm;
-        const fh = b.placement.rotated ? b.item.w_mm : b.item.h_mm;
-        // Guide traces the finished box, inside any bleed.
-        const gx = b.x + (b.w - fw) / 2;
-        const gy = b.y + (b.h - fh) / 2;
+        // Build the shape at its own finished size and let the rotation put it
+        // on the sheet — swapping the dimensions as well would rotate it twice.
+        const cx = b.x + b.w / 2;
+        const cy = b.y + b.h / 2;
         d.path(
-          shapeSvgPath(b.item.shape, gx, gy, fw, fh, rot === 90 ? 90 : 0),
+          shapeSvgPath(
+            b.item.shape,
+            cx - b.item.w_mm / 2,
+            cy - b.item.h_mm / 2,
+            b.item.w_mm,
+            b.item.h_mm,
+            b.placement.rotated ? 90 : 0,
+          ),
           GUIDE,
           0.4,
           [1.6, 1.6],
@@ -555,10 +560,16 @@ export const generatePdf = async (o: GenerateOptions): Promise<GenerateResult> =
     if (bleed_mm > 0) {
       // With overprint each edge needs its own cut: show the finished box.
       for (const b of boxes) {
-        const fw = b.placement.rotated ? b.item.h_mm : b.item.w_mm;
-        const fh = b.placement.rotated ? b.item.w_mm : b.item.h_mm;
+        const cx = b.x + b.w / 2;
+        const cy = b.y + b.h / 2;
         d.path(
-          rectSvgPath(b.x + (b.w - fw) / 2, b.y + (b.h - fh) / 2, fw, fh),
+          rectSvgPath(
+            cx - b.item.w_mm / 2,
+            cy - b.item.h_mm / 2,
+            b.item.w_mm,
+            b.item.h_mm,
+            b.placement.rotated ? 90 : 0,
+          ),
           GUIDE,
           0.3,
           [1, 1.5],

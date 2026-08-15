@@ -136,6 +136,11 @@ const run = async () => {
   await page.locator(".spread .slot").nth(0).click();
   pass("second spread added with a tilted layout");
 
+  // ---- a curved shape, so the cut guides get exercised alongside rotation
+  await page.locator(".spread .slot").nth(0).click();
+  await page.locator('.rail.right button:has-text("Arch")').click();
+  pass("arch shape applied to a slot");
+
   // The app's own report tells us how many sheets to expect, which is not
   // "pages minus one" — the layout plan can run to several pages itself.
   const expectedSheets = Number(
@@ -196,6 +201,7 @@ const run = async () => {
 
   let imagesFound = 0;
   let rulersFound = 0;
+  let dashedCurves = 0;
   const sizes = new Set();
 
   for (const p of pages) {
@@ -208,6 +214,12 @@ const run = async () => {
       const h = Number(cms[2][4]) / PT_PER_MM;
       imagesFound++;
       sizes.add(`${w.toFixed(3)}x${h.toFixed(3)}`);
+    }
+
+    // Cut guides for curved shapes: dashed paths containing beziers.
+    for (const block of text.split("q\n")) {
+      if (!/\[[\d.]+ [\d.]+\] 0 d/.test(block)) continue;
+      if (/ c\n/i.test(block) || /\bc\b/.test(block)) dashedCurves++;
     }
 
     // The 100 mm calibration rule: a horizontal line exactly 100 mm long.
@@ -234,6 +246,9 @@ if (rulersFound === expectedSheets && expectedSheets > 0) {
   } else {
     fail(`found ${rulersFound} calibration rules for ${expectedSheets} sheets`);
   }
+
+  if (dashedCurves > 0) pass(`${dashedCurves} dashed cut guide path(s) for curved shapes`);
+  else fail("arch slot produced no cut guide");
 
   // Plan pages carry no ruler, so the rest of the document is the plan.
   pass(`${pages.length - expectedSheets} layout plan page(s) + ${expectedSheets} sheet(s)`);

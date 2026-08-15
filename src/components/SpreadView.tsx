@@ -26,6 +26,20 @@ export type SpreadViewProps = {
   interactive?: boolean;
 };
 
+/**
+ * CSS radius matching what `pdfPaths.shapeSvgPath` will cut. Percentages are
+ * per-axis in CSS, so a uniform corner radius has to be given in pixels.
+ */
+const radiusFor = (shape: Slot["shape"], w: number, h: number): string | undefined => {
+  if (shape === "circle") return "50%";
+  if (shape === "rounded") return `${Math.min(w, h) * 0.09}px`;
+  if (shape === "arch") {
+    const ry = Math.min(w / 2, h * 0.6);
+    return `${w / 2}px ${w / 2}px 0 0 / ${ry}px ${ry}px 0 0`;
+  }
+  return undefined;
+};
+
 const cropContext = (
   placement: Placement,
   source: Source,
@@ -84,6 +98,7 @@ export function SpreadView(props: SpreadViewProps) {
               top: slot.y_mm * scale,
               width: w,
               height: h,
+              borderRadius: radiusFor(shape, w, h),
               transform: slot.rotation_deg ? `rotate(${slot.rotation_deg}deg)` : undefined,
             }}
             onClick={() => interactive && props.onSelectSlot(slot.id)}
