@@ -29,6 +29,27 @@ npm run build
 No backend. Everything runs in the browser; projects and photos live in
 IndexedDB.
 
+## Deploying
+
+Netlify, git-push deploys from `main`. Config is in `netlify.toml`, so the
+Netlify UI needs nothing set by hand:
+
+1. Netlify → Add new site → Import from Git → this repo
+2. Leave build command and publish directory blank — `netlify.toml` sets them
+   (`npm run build` → `dist`)
+3. Deploy
+
+Two things worth knowing:
+
+- **Node is pinned to 22.** Vite 8 requires `^20.19.0 || >=22.12.0` and
+  Netlify's default image is older, so the build fails without the pin. There
+  is a matching `.nvmrc` for local work.
+- **There are no environment variables and no Netlify Functions.** v1 is
+  entirely client-side: photos never leave the browser, and the PDF is built
+  locally with `pdf-lib`. Nothing to configure, nothing to leak.
+
+Ongoing deploys are just `git push origin main`.
+
 ## The acceptance test
 
 S6 is the acceptance test for the product: **print it, measure it.** If the
