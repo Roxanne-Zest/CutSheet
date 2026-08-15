@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  AUTHORED_TEMPLATES,
   FORMATS,
   TEMPLATES,
   formatById,
@@ -7,6 +8,42 @@ import {
   templatesForFormat,
   validateTemplates,
 } from "./templates";
+import { GENERATED_TEMPLATES, LAYOUT_GENERATORS } from "./generated";
+
+describe("both layout sets ship — neither replaces the other", () => {
+  it("keeps the hand-authored layouts", () => {
+    expect(AUTHORED_TEMPLATES.length).toBeGreaterThan(0);
+    // A few by name, so a refactor that quietly drops the seed fails here.
+    for (const id of ["pp-arch-pair", "a6-circle-trio", "a5-collage-scatter", "hc-daily-strip"]) {
+      expect(templateById(id), `${id} missing from the seed`).toBeDefined();
+    }
+  });
+
+  it("keeps the parametric layouts, one per generator per format", () => {
+    expect(GENERATED_TEMPLATES).toHaveLength(FORMATS.length * LAYOUT_GENERATORS.length);
+    for (const f of FORMATS) {
+      for (const g of LAYOUT_GENERATORS) {
+        expect(templateById(`${f.id}__${g.key}`), `${f.id}/${g.key} missing`).toBeDefined();
+      }
+    }
+  });
+
+  it("TEMPLATES is both sets, with no id collisions", () => {
+    expect(TEMPLATES).toHaveLength(AUTHORED_TEMPLATES.length + GENERATED_TEMPLATES.length);
+    expect(new Set(TEMPLATES.map((t) => t.id)).size).toBe(TEMPLATES.length);
+  });
+
+  it("every template declares where it came from", () => {
+    for (const t of AUTHORED_TEMPLATES) expect(t.origin, t.id).toBe("authored");
+    for (const t of GENERATED_TEMPLATES) expect(t.origin, t.id).toBe("generated");
+  });
+
+  it("every format now has at least the spec's 8 layouts", () => {
+    for (const f of FORMATS) {
+      expect(templatesForFormat(f.id).length, f.name).toBeGreaterThanOrEqual(8);
+    }
+  });
+});
 
 describe("S1 — formats and templates", () => {
   it("every slot sits inside its page margin", () => {
@@ -23,12 +60,6 @@ describe("S1 — formats and templates", () => {
       ["Standard TN", 110, 210],
       ["Hobonichi Cousin", 152, 216],
     ]);
-  });
-
-  it("every format has at least one layout", () => {
-    for (const f of FORMATS) {
-      expect(templatesForFormat(f.id).length, f.name).toBeGreaterThan(0);
-    }
   });
 
   it("template ids are unique and resolvable", () => {
