@@ -123,6 +123,26 @@ section > h2 {
 
 /* ---------- layout gallery ---------- */
 
+.group-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 12px 0 6px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.group-label:first-of-type { margin-top: 0; }
+.group-label span {
+  font-weight: 400;
+  color: #6a707a;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  padding: 0 5px;
+}
+
 .layouts {
   display: grid;
   grid-template-columns: repeat(3, 1fr);

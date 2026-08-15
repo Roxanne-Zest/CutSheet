@@ -9,19 +9,10 @@
  */
 
 import type { JournalFormat, Slot, Template } from "../types";
+import { FORMATS, formatById } from "./formats";
+import { GENERATED_TEMPLATES } from "./generated";
 
-// ---------------------------------------------------------------------------
-// Formats
-// ---------------------------------------------------------------------------
-
-export const FORMATS: JournalFormat[] = [
-  { id: "passport-tn", name: "Passport TN",      page_w_mm: 90,  page_h_mm: 125, margin_mm: 6 },
-  { id: "pocket",      name: "Pocket / Field Notes", page_w_mm: 89, page_h_mm: 140, margin_mm: 6 },
-  { id: "a6",          name: "A6",               page_w_mm: 105, page_h_mm: 148, margin_mm: 7 },
-  { id: "a5",          name: "A5",               page_w_mm: 148, page_h_mm: 210, margin_mm: 10 },
-  { id: "standard-tn", name: "Standard TN",      page_w_mm: 110, page_h_mm: 210, margin_mm: 8 },
-  { id: "hobonichi-cousin", name: "Hobonichi Cousin", page_w_mm: 152, page_h_mm: 216, margin_mm: 10 },
-];
+export { FORMATS, formatById };
 
 // Helper for the common case — square corners, no rotation.
 const s = (
@@ -413,12 +404,16 @@ const HOBONICHI: Template[] = [
 
 // ---------------------------------------------------------------------------
 
-export const TEMPLATES: Template[] = [
+/** The hand-authored set — the considered layouts. */
+export const AUTHORED_TEMPLATES: Template[] = [
   ...PASSPORT, ...POCKET, ...A6, ...A5, ...STANDARD, ...HOBONICHI,
-];
+].map((t) => ({ ...t, origin: "authored" as const }));
 
-export const formatById = (id: string): JournalFormat | undefined =>
-  FORMATS.find((f) => f.id === id);
+/**
+ * Everything pickable: the hand-authored layouts first, then the parametric
+ * ones. Both sets are validated by `validateTemplates` below.
+ */
+export const TEMPLATES: Template[] = [...AUTHORED_TEMPLATES, ...GENERATED_TEMPLATES];
 
 export const templateById = (id: string): Template | undefined =>
   TEMPLATES.find((t) => t.id === id);

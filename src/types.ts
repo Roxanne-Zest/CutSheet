@@ -42,6 +42,12 @@ export type Template = {
   /** Why you'd reach for this one. Shown on hover in the picker. */
   note: string;
   tags: TemplateTag[];
+  /**
+   * Where the layout came from. Hand-authored ones are the considered set;
+   * generated ones apply one rule across every format. Both are pickable —
+   * the picker groups them so near-identical names stay tellable apart.
+   */
+  origin?: "authored" | "generated";
   slots: Slot[];
 };
 
