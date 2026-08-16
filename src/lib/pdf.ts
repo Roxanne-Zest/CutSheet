@@ -1,10 +1,5 @@
-import {
-  PDFDocument,
-  StandardFonts,
-  radians,
-  rgb,
-} from "pdf-lib";
-import type { PDFFont, PDFImage, PDFPage } from "pdf-lib";
+import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
+import type { PDFFont, PDFImage } from "pdf-lib";
 import type { PrintItem, Project, SheetPlacement, Slot } from "../types";
 import { formatById, templateById } from "../data/templates";
 import { A4, mmToPt } from "./units";
@@ -14,6 +9,17 @@ import { effectiveGap, printedSize } from "./printItems";
 import { rasterizeItem } from "./raster";
 import type { Source } from "./raster";
 import { rectSvgPath, shapeSvgPath } from "./pdfPaths";
+import {
+  GUIDE,
+  HAIRLINE,
+  INK,
+  MUTED,
+  PRINT_AT_100,
+  RULER_CHECK,
+  drawRuler100,
+  makeDraw,
+} from "./pdfDraw";
+import type { Draw } from "./pdfDraw";
 
 /**
  * PDF output.
@@ -24,110 +30,11 @@ import { rectSvgPath, shapeSvgPath } from "./pdfPaths";
  * default to fit-to-page and quietly scale by about 4%.
  */
 
-const DEG = Math.PI / 180;
-
-const INK = rgb(0.09, 0.1, 0.12);
-const MUTED = rgb(0.45, 0.47, 0.5);
-const HAIRLINE = rgb(0.62, 0.64, 0.67);
-const GUIDE = rgb(0.55, 0.35, 0.75);
-
 const PLAN_MARGIN_MM = 10;
 /** Clear of the plan's title block, and of each spread's own caption above it. */
 const PLAN_TOP_MM = 28;
 const PLAN_FOOTER_MM = 22;
 const PLAN_GAP_MM = 10;
-
-/** Helpers that let the whole file think in millimetres, top-left origin. */
-const makeDraw = (page: PDFPage, pageH_mm: number) => {
-  const yUp = (y_mm: number) => mmToPt(pageH_mm - y_mm);
-
-  return {
-    yUp,
-    line(
-      x1: number,
-      y1: number,
-      x2: number,
-      y2: number,
-      thickness = 0.4,
-      color = HAIRLINE,
-      dash?: number[],
-    ) {
-      page.drawLine({
-        start: { x: mmToPt(x1), y: yUp(y1) },
-        end: { x: mmToPt(x2), y: yUp(y2) },
-        thickness,
-        color,
-        dashArray: dash,
-      });
-    },
-    text(
-      s: string,
-      x: number,
-      yBaseline: number,
-      font: PDFFont,
-      size: number,
-      color = INK,
-    ) {
-      page.drawText(s, {
-        x: mmToPt(x),
-        y: yUp(yBaseline),
-        size,
-        font,
-        color,
-      });
-    },
-    fillRect(x: number, y: number, w: number, h: number, color: ReturnType<typeof rgb>, opacity = 1) {
-      page.drawRectangle({
-        x: mmToPt(x),
-        y: yUp(y + h),
-        width: mmToPt(w),
-        height: mmToPt(h),
-        color,
-        opacity,
-      });
-    },
-    /** Draw an image at an exact physical size, rotated about its own centre. */
-    image(
-      img: PDFImage,
-      x: number,
-      y: number,
-      w: number,
-      h: number,
-      rotation_deg = 0,
-    ) {
-      const a = -rotation_deg * DEG; // page-clockwise is PDF-counterclockwise
-      const wp = mmToPt(w);
-      const hp = mmToPt(h);
-      const cx = mmToPt(x + w / 2);
-      const cy = yUp(y + h / 2);
-      const ox = (wp / 2) * Math.cos(a) - (hp / 2) * Math.sin(a);
-      const oy = (wp / 2) * Math.sin(a) + (hp / 2) * Math.cos(a);
-      page.drawImage(img, {
-        x: cx - ox,
-        y: cy - oy,
-        width: wp,
-        height: hp,
-        rotate: radians(a),
-      });
-    },
-    path(
-      d: string,
-      color: ReturnType<typeof rgb>,
-      thickness = 0.4,
-      dash?: number[],
-    ) {
-      page.drawSvgPath(d, {
-        x: 0,
-        y: mmToPt(pageH_mm),
-        borderColor: color,
-        borderWidth: thickness,
-        borderDashArray: dash,
-      });
-    },
-  };
-};
-
-type Draw = ReturnType<typeof makeDraw>;
 
 export type RasterizeFn = typeof rasterizeItem;
 
@@ -172,38 +79,12 @@ const drawFooterRule = (
   right: string[],
 ): void => {
   // Instruction line.
-  d.text(
-    'Print at 100% / Actual Size. Turn off "Fit to page" and "Shrink oversized pages".',
-    5,
-    281.5,
-    bold,
-    7.5,
-  );
+  d.text(PRINT_AT_100, 5, 281.5, bold, 7.5);
 
   // 100 mm calibration ruler. Not optional — it is the whole product.
-  const y0 = 285;
-  d.line(5, y0, 105, y0, 0.5, INK);
-  for (let mm = 0; mm <= 100; mm += 1) {
-    const major = mm % 50 === 0;
-    const mid = mm % 10 === 0;
-    const len = major ? 3 : mid ? 2.2 : 1.1;
-    d.line(5 + mm, y0, 5 + mm, y0 + len, major ? 0.5 : 0.25, major ? INK : MUTED);
-  }
-  for (const mm of [0, 50, 100]) {
-    const label = `${mm}`;
-    const w = font.widthOfTextAtSize(label, 6);
-    d.text(label, 5 + mm - w / mmToPt(1) / 2, 291.5, font, 6, MUTED);
-  }
-  d.text("mm", 107, 288.5, font, 6, MUTED);
+  drawRuler100(d, font, 5, 285);
 
-  d.text(
-    "If this ruler does not measure exactly 100.0 mm, your printer scaled the page. Reprint at 100%.",
-    5,
-    294.5,
-    font,
-    6,
-    MUTED,
-  );
+  d.text(RULER_CHECK, 5, 294.5, font, 6, MUTED);
 
   let y = 284;
   for (const lineText of right) {

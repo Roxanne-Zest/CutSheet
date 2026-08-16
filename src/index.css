@@ -64,13 +64,20 @@ label { display: block; }
 
 .app {
   display: grid;
-  grid-template-columns: 260px minmax(0, 1fr) 300px;
   grid-template-rows: auto minmax(0, 1fr);
   height: 100vh;
 }
 
+/* Each tool lays its own columns out; the shell only owns the topbar. */
+.app-body {
+  display: grid;
+  min-height: 0;
+}
+.app-body.journal { grid-template-columns: 260px minmax(0, 1fr) 300px; }
+.app-body.sizer,
+.app-body.card { grid-template-columns: minmax(0, 1fr) 320px; }
+
 .topbar {
-  grid-column: 1 / -1;
   display: flex;
   align-items: center;
   gap: 12px;
@@ -87,6 +94,8 @@ label { display: block; }
 .topbar .tagline { color: var(--muted); font-size: 12px; }
 .topbar .spacer { flex: 1; }
 .topbar input[type="text"] { width: 200px; }
+.seg.modes { flex: 0 0 auto; gap: 4px; }
+.seg.modes button { padding: 5px 12px; }
 
 .rail {
   border-right: 1px solid var(--line);
@@ -387,3 +396,109 @@ section > h2 {
   margin-top: 8px;
 }
 .progress i { display: block; height: 100%; background: var(--accent); transition: width 0.12s; }
+
+/* ---------- scale reference card ---------- */
+
+.card-preview {
+  position: relative;
+  background: var(--paper);
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.45);
+  border-radius: 2px;
+  flex: 0 0 auto;
+}
+.card-preview i {
+  position: absolute;
+  border: 1px solid #4a4f57;
+  display: block;
+}
+.card-preview .card-circle { border-radius: 50%; }
+.card-preview .card-section {
+  position: absolute;
+  font-size: 7px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #8b9099;
+}
+.card-preview .card-rule {
+  position: absolute;
+  height: 2px;
+  background: #4a4f57;
+}
+
+/* ---------- sheet sizer ---------- */
+
+.sizer-stage { padding: 0; align-items: stretch; justify-content: stretch; }
+
+.dropzone.big {
+  margin: auto;
+  max-width: 460px;
+  padding: 40px 28px;
+  border-width: 2px;
+}
+.dropzone.big h3 { color: var(--ink); font-size: 17px; margin: 0 0 10px; }
+.dropzone.big p { line-height: 1.6; margin: 0 0 8px; }
+
+.measure {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg);
+}
+.measure-canvas {
+  display: block;
+  cursor: crosshair;
+  outline: none;
+  touch-action: none;
+}
+.measure-canvas:focus-visible { box-shadow: inset 0 0 0 2px var(--accent); }
+
+.loupe {
+  position: absolute;
+  right: 14px;
+  top: 14px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  overflow: hidden;
+  background: #0e1013;
+  pointer-events: none;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.55);
+}
+.loupe canvas { display: block; image-rendering: pixelated; }
+.loupe span {
+  position: absolute;
+  right: 3px;
+  bottom: 2px;
+  font-size: 9px;
+  color: var(--accent);
+  background: rgba(0, 0, 0, 0.6);
+  padding: 0 3px;
+  border-radius: 3px;
+}
+
+.measure-hud {
+  position: absolute;
+  left: 12px;
+  bottom: 12px;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  max-width: calc(100% - 24px);
+  font-size: 11px;
+  color: var(--muted);
+  background: rgba(20, 22, 26, 0.82);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 5px 9px;
+  pointer-events: none;
+}
+.measure-hud .snap { color: var(--muted); }
+.measure-hud .snap.on { color: var(--accent); }
+
+.unit { color: var(--muted); font-size: 11px; flex: 0 0 auto; }
+
+/* A grouping element that carries the disabled state without any chrome. */
+fieldset.plain { border: 0; margin: 0; padding: 0; min-width: 0; }
+fieldset.plain:disabled { opacity: 0.45; }
