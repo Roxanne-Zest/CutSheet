@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { JournalApp } from "./JournalApp";
 import { ReferenceCardPanel } from "./components/ReferenceCardPanel";
 import { SheetSizerPanel } from "./components/SheetSizerPanel";
+import { CutPathPanel } from "./components/CutPathPanel";
 
 /**
  * Three tools, one promise: what you specify in millimetres is what comes out
@@ -13,7 +14,7 @@ import { SheetSizerPanel } from "./components/SheetSizerPanel";
  * list even though it is the smallest of the three.
  */
 
-export type AppMode = "card" | "sizer" | "journal";
+export type AppMode = "card" | "sizer" | "cutpath" | "journal";
 
 const MODES: Array<{ id: AppMode; label: string; tagline: string }> = [
   {
@@ -27,6 +28,12 @@ const MODES: Array<{ id: AppMode; label: string; tagline: string }> = [
     tagline: "Measure one sticker, print the whole sheet at the right physical size.",
   },
   {
+    id: "cutpath",
+    label: "Cut path",
+    tagline:
+      "Throw away a sticker's painted-on border and build a real vector cut path.",
+  },
+  {
     id: "journal",
     label: "Journal",
     tagline: "Pick a template, drop photos in, print at 100%, guillotine, journal.",
@@ -38,7 +45,9 @@ const STORAGE_KEY = "cutsheet.mode";
 const initialMode = (): AppMode => {
   try {
     const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved === "card" || saved === "sizer" || saved === "journal") return saved;
+    if (saved === "card" || saved === "sizer" || saved === "cutpath" || saved === "journal") {
+      return saved;
+    }
   } catch {
     // Private browsing. The default is fine.
   }
@@ -56,7 +65,7 @@ export default function App() {
     }
   }, [mode]);
 
-  const current = MODES.find((m) => m.id === mode) ?? MODES[2];
+  const current = MODES.find((m) => m.id === mode) ?? MODES[MODES.length - 1];
 
   return (
     <div className="app">
@@ -85,6 +94,7 @@ export default function App() {
         {mode === "journal" && <JournalApp />}
         {mode === "card" && <ReferenceCardPanel />}
         {mode === "sizer" && <SheetSizerPanel />}
+        {mode === "cutpath" && <CutPathPanel />}
       </div>
     </div>
   );
