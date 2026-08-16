@@ -1,21 +1,32 @@
 # Cut Sheet
 
-**Pick a template, drop photos in, get an A4 PDF of every photo at exactly the right size. Print it, cut it, journal.**
+**What you specify in millimetres is what comes out of the printer in millimetres.**
+
+Three tools that share one promise:
+
+| Tool | For |
+|---|---|
+| **Reference card** | Finding out whether your printer scales at all. One page of shapes at known sizes. |
+| **Sheet sizer** | Artwork somebody else made. Measure one sticker, print the sheet at true size. |
+| **Journal** | Photos you laid out yourself. Pick a template, drop photos in, guillotine. |
 
 ```
-Pick journal format + layout
-        ↓
-Drop photos into slots, pan/zoom
-        ↓
-Add more spreads
-        ↓
-Generate → A4 PDF
-        ↓
-Print at 100% → guillotine → journal
+Journal                       Sheet sizer
+Pick format + layout          Drop a sticker sheet in
+        ↓                             ↓
+Drop photos into slots        Drag a line across one circle
+        ↓                             ↓
+Add more spreads              Type "12 mm"
+        ↓                             ↓
+Generate → A4 PDF             PDF at true physical size
+        ↓                             ↓
+Print at 100% → guillotine    Print at 100% → punch
 ```
 
 The app owns the geometry, so nothing is inferred. Crop, size, rotation and
-required DPI are all values the app set.
+required DPI are all values the app set. Every sheet it produces carries the
+same 100 mm calibration rule, drawn by one function — measure it before you
+trust anything else on the page.
 
 ## Running it
 
@@ -50,21 +61,33 @@ Two things worth knowing:
 
 Ongoing deploys are just `git push origin main`.
 
-## The acceptance test
+## The acceptance tests
 
-S6 is the acceptance test for the product: **print it, measure it.** If the
-100 mm calibration ruler on the sheet does not measure 100.0 mm, your printer
-scaled the page and nothing else counts.
+All three are physical, and none has been run on paper yet — that part is
+yours.
 
-That is checked in CI too, not just on paper. `src/lib/pdf.test.ts` generates a
-PDF, inflates its content streams and measures the boxes that actually got
-written — so "a 54 mm photo measures 54 mm" and "the ruler is 100.0 mm" are
-assertions against real output rather than against the calls that produced it.
+- **S6, the journal:** print it, measure it. If the 100 mm calibration ruler on
+  the sheet does not measure 100.0 mm, your printer scaled the page and nothing
+  else counts. A 54 mm photo must measure 54 mm.
+- **X5, the sizer:** print a real sticker sheet, punch it, **the punch fits.**
+- **X1, the card:** the printed card's 100 mm rule measures 100.0 mm and its
+  12 mm circle measures 12.0 mm.
+
+Everything short of the paper is checked automatically. `src/lib/pdf.test.ts`,
+`refCard.test.ts` and `sizerPdf.test.ts` generate PDFs, inflate their content
+streams and measure the boxes that actually got written — so "the artwork is
+drawn 190 x 261 mm" and "the ruler is 100.0 mm" are assertions against real
+output rather than against the calls that produced it. `e2e/scale.mjs` goes
+further: it draws a sticker sheet with discs of an exactly known pixel
+diameter, drags a deliberately sloppy line across one in a real browser, and
+checks that snap-to-edge recovers the true diameter and that the resulting PDF
+puts that disc on paper at the millimetre size it was told to.
 
 ```bash
-npm test                 # 69 unit + PDF tests
+npm test                 # unit + PDF tests
 npm run dev &            # then, against a real browser:
-npm run e2e              # drives the UI, generates a PDF, measures it
+npm run e2e              # journal: drives the UI, generates a PDF, measures it
+npm run e2e:scale        # reference card + sheet sizer, same treatment
 npm run e2e:render       # renders the PDF pages to e2e-out/*.png to look at
 ```
 
@@ -73,7 +96,15 @@ npm run e2e:render       # renders the PDF pages to e2e-out/*.png to look at
 | Module | Job |
 |---|---|
 | `data/formats.ts` | The six journal page sizes |
-| `data/layouts.ts` | 12 parametric layout generators → 72 templates |
+| `data/templates.ts` | 45 hand-drawn layouts + the registry both sets feed |
+| `data/generated.ts` | 12 parametric generators → 72 templates |
+| `lib/refCard.ts` | The scale reference card: shapes, punch bleed, layout |
+| `lib/imperial.ts` | Which millimetre sizes really are inch fractions |
+| `lib/sheetSizer.ts` | Sizer arithmetic: scale, dpi, fit vs tile |
+| `lib/edgeSnap.ts` | Snap-to-edge for the measure tool |
+| `lib/sheetSource.ts` | Loading PNG / JPEG / PDF artwork |
+| `lib/sizerPdf.ts` | Sizer output: true size, tiling, ruler |
+| `lib/pdfDraw.ts` | Millimetre drawing helpers and the one 100 mm ruler |
 | `lib/geometry.ts` | Crop maths: fill, pan, zoom, quarter turns, straighten |
 | `lib/quality.ts` | 300/200 dpi bands, rechecked on every zoom |
 | `lib/printItems.ts` | Spreads → one flat `PrintItem` list |
@@ -124,6 +155,72 @@ flagged in `src/types.ts`:
   renderer cannot reconstruct these from `crop` alone, and `label` is the P-ID
   shared between the layout plan and the sheets.
 - `OutputSettings.cornerStyle` — see below.
+
+## The scale tools
+
+Two problems that look like one and are not:
+
+1. **Your printer scales.** Print dialogs default to fit-to-page and quietly
+   shrink by about 4%. A one-off calibration fixes this forever — that is the
+   **reference card**.
+2. **A sticker sheet has no inherent size.** A PNG someone sent you is
+   2400 x 3300 px. Nothing in the file says the circles should be 12 mm, so
+   there is no "correct" percentage to print at. That is the **sheet sizer**.
+
+### Reference card
+
+Circles at 8, 10, 12, 15, 19, 20, 25, 25.4, 32 and 38 mm, squares at 10, 20 and
+25 mm, a 100 mm rule and a 1 inch bar. Type any diameter to add your own, in a
+row of six so it lays across a sheet of stickers.
+
+**Punch mode** adds 0.5 mm and labels by the punch rather than by what is drawn,
+so a circle labelled "12 mm punch" is physically 12.5 mm. A 12 mm punch on a
+12 mm printed circle leaves a white rim if you are even slightly off centre; on
+a 12.5 mm circle the blade lands inside the ink every time.
+
+Imperial equivalents are only shown where the two systems genuinely agree —
+19 mm really is 3/4", 25.4 mm really is 1", and 25 mm is neither. Calling a
+25 mm circle an inch is exactly how a punch stops fitting.
+
+### Sheet sizer
+
+```
+Drop the sheet in → drag across one circle → type "12 mm"
+        ↓
+scale = target_mm / measured_px, and every other dimension follows
+        ↓
+PDF at true physical size → print at 100% → punch
+```
+
+No iteration, no eyeballing. The measuring is built for the last pixel rather
+than the first: a 400% loupe while you drag, arrow keys for single pixels, and
+**snap-to-edge** on release, which searches ±6 px along the drag axis for the
+strongest contrast change. That last one is what turns "roughly on the edge"
+into "on the edge" — and it matters, because a 0.5 mm slip on a 12 mm circle is
+4% out across the whole sheet. The UI says to measure the largest feature you
+can find, for the same reason.
+
+**PDFs need no measuring.** A PDF carries real units, so its declared page size
+is used directly and the page is embedded as vector rather than resampled. You
+can turn that off and measure it by hand if the export declares a nominal size.
+
+**Oversize handling.** Tiling keeps every sticker true size, across sheets with
+a 5 mm overlap. Scale-to-fit is offered because people ask for it, and says on
+the page itself that it is `SCALED TO n% - NOT TRUE SIZE`. Choosing one sheet
+for artwork that does not fit gives you the middle of it at true size, cropped
+to the printable box so the warning telling you that is still readable.
+
+### What was deliberately left out
+
+- **Punch guides** — a hairline circle at punch size centred on each detected
+  sticker. That needs circle detection, which is a bigger job than it sounds.
+  Manual measuring with snap-to-edge is a five-second job; build the guides when
+  real sheets prove they are wanted.
+- **Per-printer calibration.** If someone's printer is reliably 96%, the app
+  could pre-compensate. That hides a problem rather than fixing it. Turn
+  fit-to-page off instead.
+- **Circle detection via Hough transform.** Same answer: not before there is
+  demand.
 
 ## Open questions from the spec
 
