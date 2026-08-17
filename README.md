@@ -112,7 +112,8 @@ npm run e2e:render       # renders the PDF pages to e2e-out/*.png to look at
 | `lib/sizerPdf.ts` | Sizer output: true size, tiling, ruler |
 | `lib/pdfDraw.ts` | Millimetre drawing helpers and the one 100 mm ruler |
 | `lib/cutpath/edt.ts` | Exact Euclidean distance transform — circular morphology at any radius |
-| `lib/cutpath/mask.ts` | P1: median pre-pass, alpha threshold, corner flood fill |
+| `lib/cutpath/mask.ts` | P1: median pre-pass, alpha threshold, corner flood fill, route choice |
+| `lib/cutpath/ink.ts` | P1 second route: flat-field, gradient, outline masking |
 | `lib/cutpath/clean.ts` | P2: open/close, component filter, hole fill, merge detection |
 | `lib/cutpath/trace.ts` | P3: marching squares via d3-contour, one polygon per sticker |
 | `lib/cutpath/simplify.ts` | P4: RDP + Chaikin, with the node budget |
@@ -253,6 +254,33 @@ Seven stages, six controls:
 ```
 mask → clean → trace → simplify → offset → make cuttable → composite
 ```
+
+### Two ways to find the artwork
+
+**Paper** floods inward from the corners. **Ink** masks what is darker than the
+*local* paper or enclosed by a drawn outline. They fail in opposite directions,
+so it is a choice, not a tuning knob.
+
+The paper route's failure is the nasty one, because it is silent. On an
+illustrated sheet — sepia foxes on aged cream stock — the pale fur is **2.5%**
+away from the paper it sits on. Any tolerance wide enough to clear the paper
+amputates it: measured on a fixture built from a real sheet, a 42 mm sticker
+comes out 36 mm with its tail gone, and *the sticker count never changes*. So
+the app now measures the amputation directly, by re-running the fill at a
+tolerance too tight to reach anything but true paper, and says how much is being
+eaten before you cut forty of them.
+
+The ink route survives that, because the pale fur is kept by being *enclosed*
+rather than by being dark. It also divides the paper out first, which matters:
+past about 10% of vignette the flood fill cannot reach a lighter middle from a
+darker corner, unreached paper turns into artwork, and separate stickers weld
+together.
+
+One thing that bit during the build and is worth knowing: **the ink route reads
+the unfiltered image on purpose.** The 3×3 median pre-pass exists to kill JPEG
+ringing, and it erases a one-pixel line outright — which is exactly the
+structure this route reads. Filtering first lost the pale regions the route
+exists to keep, and fragmented 12 shapes into 52.
 
 **The background tolerance does double duty, and that is the mechanism.** Set it
 high enough and the flood fill eats the painted-on border too, because that

@@ -278,6 +278,103 @@ const run = async () => {
 
   await page.screenshot({ path: join(OUT, "cutpath.png") });
 
+  // ================= Ink route: illustration on decorative paper =================
+  // The case the paper route cannot do — pale artwork on pale paper, every
+  // element ringed by a drawn outline, and the paper unevenly aged.
+  const illustrated = await page.evaluate(async () => {
+    const w = 700, h = 600;
+    const c = document.createElement("canvas");
+    c.width = w; c.height = h;
+    const x = c.getContext("2d");
+    const img = x.createImageData(w, h);
+    const PAPER = [242, 230, 208], INK = [95, 62, 32], MID = [186, 140, 88], PALE = [237, 224, 200];
+    for (let y = 0; y < h; y++) for (let px = 0; px < w; px++) {
+      const d = Math.hypot(px / w - 0.5, y / h - 0.5) / 0.7;
+      const k = 1 - 0.15 * d;                       // aged paper, darker at the edges
+      const o = (y * w + px) * 4;
+      img.data[o] = PAPER[0] * k; img.data[o+1] = PAPER[1] * k; img.data[o+2] = PAPER[2] * k;
+      img.data[o+3] = 255;
+    }
+    const put = (px, y, col) => {
+      if (px < 0 || y < 0 || px >= w || y >= h) return;
+      const o = (Math.round(y) * w + Math.round(px)) * 4;
+      img.data[o] = col[0]; img.data[o+1] = col[1]; img.data[o+2] = col[2];
+    };
+    const blob = (cx, cy, rx, ry, col) => {
+      for (let y = cy-ry-2; y <= cy+ry+2; y++) for (let px = cx-rx-2; px <= cx+rx+2; px++) {
+        const t = ((px-cx)/rx)**2 + ((y-cy)/ry)**2;
+        if (t <= 1) put(px, y, col); else if (t <= 1.06) put(px, y, INK);
+      }
+    };
+    for (let r = 0; r < 2; r++) for (let col = 0; col < 3; col++) {
+      const cx = 130 + col * 190, cy = 150 + r * 220;
+      blob(cx, cy, 62, 44, MID);
+      blob(cx - 40, cy - 26, 24, 20, INK);
+      blob(cx + 52, cy - 10, 34, 18, PALE);   // pale tail, same tone as the paper
+    }
+    x.putImageData(img, 0, 0);
+    const blob2 = await new Promise((r) => c.toBlob(r, "image/png"));
+    return Array.from(new Uint8Array(await blob2.arrayBuffer()));
+  });
+
+  const beforeInk = await page.locator(".readout").innerText();
+  await page.setInputFiles('input[type="file"]', {
+    name: "illustrated.png",
+    mimeType: "image/png",
+    buffer: Buffer.from(illustrated),
+  });
+  await page.waitForFunction(
+    (prev) => {
+      const el = document.querySelector(".readout");
+      return el && !/working|Tracing/.test(el.textContent) && el.textContent !== prev;
+    },
+    beforeInk,
+    { timeout: 30000 },
+  );
+  await page.fill('input[aria-label="Finished width in millimetres"]', "180");
+  const onPaper = await settled(page, await page.locator(".readout").innerText());
+
+  const warned = await page.locator(".rail.right").innerText();
+  if (/being eaten by the flood fill/.test(warned) || onPaper.stickers < 6) {
+    pass(`paper route on an illustrated sheet: ${onPaper.stickers} stickers, and the app says why`);
+  } else {
+    fail(`paper route reported ${onPaper.stickers} stickers with no warning — the amputation is silent`);
+  }
+
+  await page.click('.rail.right .seg button:has-text("Ink")');
+  const onInk = await settled(page, await page.locator(".readout").innerText());
+
+  if (onInk.stickers === 6) pass(`ink route finds all 6 stickers on the aged sheet`);
+  else fail(`ink route found ${onInk.stickers} stickers, expected 6`);
+
+  // Body + tail spans about 151 px of 700 at 180 mm, plus a 2 mm border: ~43 mm.
+  // The paper route loses the tail and lands near 36.
+  if (onInk.w_mm > onPaper.w_mm) {
+    pass(`ink route keeps the pale tails (${onInk.w_mm} mm vs ${onPaper.w_mm} mm on paper)`);
+  } else {
+    fail(`ink route did not recover the tails: ${onInk.w_mm} vs ${onPaper.w_mm} mm`);
+  }
+
+  if (await page.locator('input[aria-label="Ink threshold"]').count()) {
+    pass("ink route swaps in its own controls");
+  } else {
+    fail("ink route did not show Ink threshold");
+  }
+  if (!(await page.locator('input[aria-label="Background tolerance"]').count())) {
+    pass("the paper route's tolerance is hidden while the ink route is on");
+  } else {
+    fail("Background tolerance still showing on the ink route");
+  }
+
+  await page.screenshot({ path: join(OUT, "cutpath-ink.png") });
+
+  // Hand the rest of the run the state it expects to start from.
+  await page.click('.rail.right .seg button:has-text("Paper")');
+  await page.fill('input[aria-label="Finished width in millimetres"]', "48");
+  await settled(page, await page.locator(".readout").innerText());
+
+
+
   // ---- P3: six stickers, six paths
   const sheet = await page.evaluate(async () => {
     const w = 900;

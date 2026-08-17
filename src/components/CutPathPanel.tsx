@@ -11,10 +11,13 @@ import type { CutPathRequest, CutPathResponse } from "../workers/cutpath.worker"
 /**
  * Cut Path Builder.
  *
- * Six controls, in pipeline order, and both canvases update on every one of
- * them. The mask overlay is the important one to watch: it is the only place
- * the flood fill eating a white cloud shows up, and seeing it is most of the
- * fix.
+ * Controls in pipeline order, and both canvases update on every one of them.
+ * The mask overlay is the important one to watch: it is where the flood fill
+ * eating a white cloud shows up, and seeing it is most of the fix.
+ *
+ * The first control is which question to ask of the image at all — is the
+ * background a flat colour to flood, or is this ink on paper? They fail in
+ * opposite directions, so it is a choice rather than a tuning knob.
  */
 
 /**
@@ -492,36 +495,85 @@ export function CutPathPanel() {
 
             <section>
               <h2>Trace</h2>
-              <Slider
-                label="Background tolerance"
-                value={Math.round(s.backgroundTolerance * 100)}
-                min={0}
-                max={60}
-                step={1}
-                unit="%"
-                onChange={(v) => patch({ backgroundTolerance: v / 100 })}
-                hint={
-                  usingAlpha
-                    ? "Not used: this file has real transparency, so the alpha threshold below is doing the work."
-                    : "Raise it until the painted-on border stops being magenta. That is the control that strips it."
-                }
-                disabled={usingAlpha}
-              />
-              <Slider
-                label="Edge threshold"
-                value={Math.round(s.edgeThreshold * 100)}
-                min={20}
-                max={80}
-                step={1}
-                unit="%"
-                onChange={(v) => patch({ edgeThreshold: v / 100 })}
-                hint={
-                  usingAlpha
-                    ? "Feathered alpha moves the boundary, which is why this is a control and not a constant."
-                    : "Not used: this file is opaque, so the flood fill above is doing the work."
-                }
-                disabled={!usingAlpha}
-              />
+              {!usingAlpha && (
+                <div className="field">
+                  <span>
+                    <span>How to find the artwork</span>
+                  </span>
+                  <div className="seg">
+                    {(["paper", "ink"] as const).map((r) => (
+                      <button
+                        key={r}
+                        className={s.route === r ? "active" : ""}
+                        onClick={() => patch({ route: r })}
+                        title={
+                          r === "paper"
+                            ? "Flood fill inward from the corners. Right whenever the background is a flat colour the artwork does not share."
+                            : "Mask what is darker than the local paper or enclosed by a drawn outline. The one that survives pale artwork on pale paper."
+                        }
+                      >
+                        {r === "paper" ? "Paper" : "Ink"}
+                      </button>
+                    ))}
+                  </div>
+                  <p className="hint">
+                    {s.route === "paper"
+                      ? "Floods in from the corners. Fails when the artwork shares a tone with the paper — cream fur on cream paper — because no tolerance separates them."
+                      : "Reads drawn outlines instead of colour, so pale artwork survives by being enclosed rather than by being dark. Also divides out uneven paper first."}
+                  </p>
+                </div>
+              )}
+
+              {!usingAlpha && s.route === "paper" && (
+                <Slider
+                  label="Background tolerance"
+                  value={Math.round(s.backgroundTolerance * 100)}
+                  min={0}
+                  max={60}
+                  step={1}
+                  unit="%"
+                  onChange={(v) => patch({ backgroundTolerance: v / 100 })}
+                  hint="Raise it until the painted-on border stops being magenta. That is the control that strips it."
+                />
+              )}
+
+              {!usingAlpha && s.route === "ink" && (
+                <>
+                  <Slider
+                    label="Ink threshold"
+                    value={Math.round(s.inkThreshold * 100)}
+                    min={2}
+                    max={50}
+                    step={1}
+                    unit="%"
+                    onChange={(v) => patch({ inkThreshold: v / 100 })}
+                    hint="How much darker than the surrounding paper still counts as artwork."
+                  />
+                  <Slider
+                    label="Edge sensitivity"
+                    value={Math.round(s.edgeSensitivity * 100)}
+                    min={1}
+                    max={30}
+                    step={1}
+                    unit="%"
+                    onChange={(v) => patch({ edgeSensitivity: v / 100 })}
+                    hint="How strong a tonal step counts as a drawn outline. Lower it if paper texture is registering as ink; raise it if faint lines are being missed."
+                  />
+                </>
+              )}
+
+              {usingAlpha && (
+                <Slider
+                  label="Edge threshold"
+                  value={Math.round(s.edgeThreshold * 100)}
+                  min={20}
+                  max={80}
+                  step={1}
+                  unit="%"
+                  onChange={(v) => patch({ edgeThreshold: v / 100 })}
+                  hint="Feathered alpha moves the boundary, which is why this is a control and not a constant."
+                />
+              )}
               <Slider
                 label="Smoothing"
                 value={s.smoothing}
