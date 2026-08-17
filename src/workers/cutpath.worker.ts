@@ -31,7 +31,7 @@ export type CutPathResponse = {
   maskH: number;
   stats: {
     stickers: number;
-    source: "alpha" | "background";
+    source: "alpha" | "background" | "ink";
     nodes: number;
     w_mm: number;
     h_mm: number;

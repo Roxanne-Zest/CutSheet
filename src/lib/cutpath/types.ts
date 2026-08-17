@@ -22,9 +22,24 @@ export type Ring = Pt[];
 /** One traced shape: an outer boundary and any holes inside it. */
 export type Poly = { outer: Ring; holes: Ring[] };
 
+/**
+ * How the artwork gets separated from what it sits on.
+ *
+ * `paper` floods inward from the corners and is right whenever the background
+ * is a flat colour the artwork does not share. `ink` masks what is darker than
+ * the local paper or enclosed by a drawn outline, which is the only one of the
+ * two that survives pale artwork on pale paper.
+ */
+export type MaskRoute = "paper" | "ink";
+
 export type CutPathSettings = {
+  route: MaskRoute;
   /** How far from the corner colour still counts as background. 0..1. */
   backgroundTolerance: number;
+  /** Ink route: how much darker than the local paper counts as ink. 0..1. */
+  inkThreshold: number;
+  /** Ink route: how strong a tonal step counts as a drawn outline. 0..1. */
+  edgeSensitivity: number;
   /** Alpha cut-off, for artwork that has an alpha channel. 0..1. */
   edgeThreshold: number;
   /** Morphological open/close radius, in source pixels. */
@@ -40,7 +55,10 @@ export type CutPathSettings = {
 };
 
 export const DEFAULT_CUTPATH: CutPathSettings = {
+  route: "paper",
   backgroundTolerance: 0.12,
+  inkThreshold: 0.12,
+  edgeSensitivity: 0.06,
   edgeThreshold: 0.5,
   smoothing: 2,
   border_mm: 2,
@@ -61,7 +79,7 @@ export const NODE_BUDGET = 400;
 export type CutPathStats = {
   stickers: number;
   /** Which route the mask took, so the UI can grey out the control that is idle. */
-  source: "alpha" | "background";
+  source: "alpha" | "background" | "ink";
   nodes: number;
   /** Finished size of the whole cut path, in millimetres. */
   w_mm: number;

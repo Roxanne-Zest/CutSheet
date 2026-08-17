@@ -1,5 +1,6 @@
-import type { Mask } from "./types";
+import type { Mask, MaskRoute } from "./types";
 import { newMask } from "./types";
+import { DEFAULT_INK, amputationRatio, inkMask } from "./ink";
 
 /**
  * P1 — get a binary artwork/not-artwork mask.
@@ -139,39 +140,84 @@ export const maskFromBackground = (img: Rgba, tolerance: number): Mask => {
 export type MaskReport = {
   mask: Mask;
   /** Which route was taken, so the UI can show the control that matters. */
-  source: "alpha" | "background";
+  source: "alpha" | "background" | "ink";
   /** Fraction of pixels that ended up as artwork. */
   coverage: number;
   warnings: string[];
 };
 
+/**
+ * Tolerance tight enough to reach nothing but true paper. Used only as the
+ * yardstick for how much artwork a wider tolerance is eating.
+ */
+const TIGHT_TOLERANCE = 0.015;
+/** Losing this much of the artwork is worth interrupting someone over. */
+const AMPUTATION_LIMIT = 0.04;
+
 export const buildMask = (
   img: Rgba,
-  o: { edgeThreshold: number; backgroundTolerance: number },
+  o: {
+    route?: MaskRoute;
+    edgeThreshold: number;
+    backgroundTolerance: number;
+    inkThreshold?: number;
+    edgeSensitivity?: number;
+  },
 ): MaskReport => {
   const filtered = medianFilter3(img);
+  const warnings: string[] = [];
+
   const useAlpha = hasUsefulAlpha(filtered);
-  const mask = useAlpha
-    ? maskFromAlpha(filtered, o.edgeThreshold)
-    : maskFromBackground(filtered, o.backgroundTolerance);
+  const route: MaskReport["source"] =
+    useAlpha ? "alpha" : o.route === "ink" ? "ink" : "background";
+
+  const mask =
+    route === "alpha"
+      ? maskFromAlpha(filtered, o.edgeThreshold)
+      : route === "ink"
+        ? // Deliberately the unfiltered image. The median pre-pass is a tonal
+          // denoiser, and a 3x3 median erases a one-pixel line outright — which
+          // is precisely the structure this route reads. Filtering first loses
+          // the pale regions the route exists to keep, and fragments the rest.
+          inkMask(img, {
+            inkThreshold: o.inkThreshold ?? DEFAULT_INK.inkThreshold,
+            edgeSensitivity: o.edgeSensitivity ?? DEFAULT_INK.edgeSensitivity,
+          })
+        : maskFromBackground(filtered, o.backgroundTolerance);
 
   let set = 0;
   for (let i = 0; i < mask.data.length; i++) set += mask.data[i];
   const coverage = set / mask.data.length;
 
-  const warnings: string[] = [];
   if (coverage < 0.01) {
     warnings.push(
-      useAlpha
+      route === "alpha"
         ? "Almost nothing survived the alpha threshold. Try lowering Edge threshold."
-        : "Almost nothing survived the flood fill — the tolerance is eating the artwork. Lower Background tolerance.",
+        : route === "ink"
+          ? "Almost nothing survived. Lower Ink threshold, or raise Edge sensitivity so the outlines register."
+          : "Almost nothing survived the flood fill — the tolerance is eating the artwork. Lower Background tolerance.",
     );
   }
-  if (coverage > 0.985 && !useAlpha) {
+  if (coverage > 0.985 && route !== "alpha") {
     warnings.push(
-      "The flood fill found almost no background. Raise Background tolerance, or crop the artwork first.",
+      route === "ink"
+        ? "Everything registered as ink. Raise Ink threshold, or lower Edge sensitivity — paper texture is being read as outlines."
+        : "The flood fill found almost no background. Raise Background tolerance, or crop the artwork first.",
     );
   }
 
-  return { mask, source: useAlpha ? "alpha" : "background", coverage, warnings };
+  // The failure that has no other symptom: on a sheet whose artwork shares a
+  // tone with its paper, a workable-looking tolerance quietly amputates the pale
+  // parts of every sticker and the count never changes. Measure it directly.
+  if (route === "background" && coverage > 0.01 && coverage < 0.985) {
+    const tight = maskFromBackground(filtered, Math.min(TIGHT_TOLERANCE, o.backgroundTolerance));
+    const lost = amputationRatio(mask, tight);
+    if (lost > AMPUTATION_LIMIT) {
+      warnings.push(
+        `About ${Math.round(lost * 100)}% of the artwork is being eaten by the flood fill — pale areas sitting on pale paper. The sticker count will not show this. Switch to the Ink route, or drop Background tolerance below ${Math.round(TIGHT_TOLERANCE * 100)}%.`,
+      );
+    }
+  }
+
+  return { mask, source: route, coverage, warnings };
 };
