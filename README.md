@@ -2,12 +2,13 @@
 
 **What you specify in millimetres is what comes out of the printer in millimetres.**
 
-Three tools that share one promise:
+Four tools that share one promise:
 
 | Tool | For |
 |---|---|
 | **Reference card** | Finding out whether your printer scales at all. One page of shapes at known sizes. |
 | **Sheet sizer** | Artwork somebody else made. Measure one sticker, print the sheet at true size. |
+| **Cut path** | A sticker with a messy painted-on border. Throw that edge away and build a real vector cut path. |
 | **Journal** | Photos you laid out yourself. Pick a template, drop photos in, guillotine. |
 
 ```
@@ -63,7 +64,7 @@ Ongoing deploys are just `git push origin main`.
 
 ## The acceptance tests
 
-All three are physical, and none has been run on paper yet — that part is
+All four are physical, and none has been run on paper yet — that part is
 yours.
 
 - **S6, the journal:** print it, measure it. If the 100 mm calibration ruler on
@@ -72,6 +73,10 @@ yours.
 - **X5, the sizer:** print a real sticker sheet, punch it, **the punch fits.**
 - **X1, the card:** the printed card's 100 mm rule measures 100.0 mm and its
   12 mm circle measures 12.0 mm.
+- **P5, the cut path:** take a real AI-generated sticker with a wobbly border,
+  run it through, **cut it on the plotter.** The edge should be even all the way
+  round and match the printed border within a millimetre. Screen preview proves
+  nothing here.
 
 Everything short of the paper is checked automatically. `src/lib/pdf.test.ts`,
 `refCard.test.ts` and `sizerPdf.test.ts` generate PDFs, inflate their content
@@ -88,6 +93,7 @@ npm test                 # unit + PDF tests
 npm run dev &            # then, against a real browser:
 npm run e2e              # journal: drives the UI, generates a PDF, measures it
 npm run e2e:scale        # reference card + sheet sizer, same treatment
+npm run e2e:cutpath      # cut path builder, against a wobbly-bordered sticker
 npm run e2e:render       # renders the PDF pages to e2e-out/*.png to look at
 ```
 
@@ -105,6 +111,15 @@ npm run e2e:render       # renders the PDF pages to e2e-out/*.png to look at
 | `lib/sheetSource.ts` | Loading PNG / JPEG / PDF artwork |
 | `lib/sizerPdf.ts` | Sizer output: true size, tiling, ruler |
 | `lib/pdfDraw.ts` | Millimetre drawing helpers and the one 100 mm ruler |
+| `lib/cutpath/edt.ts` | Exact Euclidean distance transform — circular morphology at any radius |
+| `lib/cutpath/mask.ts` | P1: median pre-pass, alpha threshold, corner flood fill |
+| `lib/cutpath/clean.ts` | P2: open/close, component filter, hole fill, merge detection |
+| `lib/cutpath/trace.ts` | P3: marching squares via d3-contour, one polygon per sticker |
+| `lib/cutpath/simplify.ts` | P4: RDP + Chaikin, with the node budget |
+| `lib/cutpath/offset.ts` | P5/P6: clipper offset, then vector close + open at the blade radius |
+| `lib/cutpath/composite.ts` | P7: scanline rasteriser and the border regeneration |
+| `lib/cutpath/exportPath.ts` | P7: SVG, PDF, Cricut PNG sizing |
+| `workers/cutpath.worker.ts` | P8: the whole pipeline, off the main thread |
 | `lib/geometry.ts` | Crop maths: fill, pan, zoom, quarter turns, straighten |
 | `lib/quality.ts` | 300/200 dpi bands, rechecked on every zoom |
 | `lib/printItems.ts` | Spreads → one flat `PrintItem` list |
@@ -221,6 +236,61 @@ to the printable box so the warning telling you that is still readable.
   fit-to-page off instead.
 - **Circle detection via Hough transform.** Same answer: not before there is
   demand.
+
+## Cut path builder
+
+An AI-generated sticker arrives with a white border **painted into the pixels**.
+It wobbles, it is soft, and there is no geometry behind it — nothing for a
+plotter to follow. Contour detection on that edge gives a drunk path.
+
+So this does not try to clean it. **It discards it and regenerates.** Find the
+artwork proper, throw away whatever fake border came with it, build a fresh
+mathematically-offset one with a real vector path. That is why it works: it is
+not tracing a bad edge, it is replacing it.
+
+Seven stages, six controls:
+
+```
+mask → clean → trace → simplify → offset → make cuttable → composite
+```
+
+**The background tolerance does double duty, and that is the mechanism.** Set it
+high enough and the flood fill eats the painted-on border too, because that
+border is near-white and touching the background. The live magenta overlay is
+how you see it happening — and it is also how you catch the known failure, where
+a white cloud or a snowman touching the frame gets eaten along with it. The
+overlay makes that visible immediately, which is most of the fix; the protect
+brush is for the first time it actually costs you.
+
+**Making it cuttable is not a refinement.** A blade has a physical radius and
+cannot turn inside it; anywhere the path asks it to, it tears the vinyl. After
+offsetting, a vector *closing* removes every concavity tighter than the blade
+radius and a vector *opening* rounds every convexity to it. Opening is then
+idempotent — which is the precise statement of "the blade can follow this", and
+what the tests assert rather than eyeballing a screenshot.
+
+Worth knowing: at a +2 mm border the offset itself already resolves most tight
+features, so the blade radius earns its keep mainly at 0 or negative offsets.
+
+**The node budget is enforced on the path that reaches the plotter**, not on the
+trace. Offsetting adds nodes — every round join is an arc — so checking earlier
+would let a 400-node trace leave as a 700-node cut. If detailed artwork will not
+fit, the tolerance is raised automatically and the readout says by how much,
+rather than shipping something the plotter chews on.
+
+### Output
+
+| Target | File |
+|---|---|
+| Universal | SVG — artwork embedded, cut path on its own layer, document sized in mm |
+| Cricut | Transparent PNG at exactly 300 dpi, path baked as the alpha boundary |
+| Print & trim | PDF with the path as a hairline guide |
+| Silhouette | PDF with registration marks — **see the caveat below** |
+
+The Silhouette registration marks follow the published layout (filled square top
+left, L-brackets top right and bottom left) but the exact dimensions vary between
+Studio versions, and this has **not been verified against a real cut**. The
+export says so on the page itself. Run one test sheet before trusting it.
 
 ## Open questions from the spec
 

@@ -5,6 +5,11 @@
     "types": ["node", "vite/client"],
     "noEmit": true
   },
-  "include": ["src/**/*.test.ts", "src/**/*.test.tsx", "src/lib/pdfInspect.ts"],
+  "include": [
+    "src/**/*.test.ts",
+    "src/**/*.test.tsx",
+    "src/lib/pdfInspect.ts",
+    "src/types/**/*.d.ts"
+  ],
   "exclude": []
 }
