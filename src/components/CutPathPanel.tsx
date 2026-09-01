@@ -126,6 +126,23 @@ export function CutPathPanel() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [over, setOver] = useState(false);
+  /**
+   * What is in the width box while it is being typed in.
+   *
+   * The committed setting cannot hold "" or "21" on the way to "210", and a
+   * box driven straight from it rewrites the field mid-keystroke: clear it and
+   * `Number("")` is 0, which falls back to 1, and the 1 you are then trying to
+   * delete reappears the instant you delete it. So the text lives here until
+   * it parses, and the setting only moves when it does.
+   */
+  const [widthDraft, setWidthDraft] = useState<string | null>(null);
+  /**
+   * Displayed width of the result canvas.
+   *
+   * The cut path's line width is derived from it, so a window resize has to
+   * redraw or the line keeps the thickness the old layout needed.
+   */
+  const [paneWidth, setPaneWidth] = useState(0);
 
   const workerRef = useRef<Worker | null>(null);
   const requestId = useRef(0);
@@ -254,6 +271,16 @@ export function CutPathPanel() {
     [s.width_mm, rgb],
   );
 
+  useEffect(() => {
+    const canvas = resultRef.current;
+    if (!canvas) return;
+    const ro = new ResizeObserver(([entry]) => {
+      setPaneWidth(entry.contentRect.width);
+    });
+    ro.observe(canvas);
+    return () => ro.disconnect();
+  }, [loaded]);
+
   // ---- right canvas: the regenerated artwork plus the proposed path
   useEffect(() => {
     const canvas = resultRef.current;
@@ -279,21 +306,40 @@ export function CutPathPanel() {
     tmp.getContext("2d")?.putImageData(composed, 0, 0);
     ctx.drawImage(tmp, 0, 0);
 
-    // The cut path itself, 1 px cyan.
+    // The cut path itself.
+    //
+    // Width is in canvas pixels, but the canvas is scaled to fit the pane — a
+    // sheet worked at 1400 px shown in half that draws a 1 px line at half a
+    // screen pixel, which antialiasing turns into almost nothing. So the line
+    // is sized against the displayed width and stays the same on screen
+    // whatever the artwork's resolution.
     const pxPerMm = s.width_mm > 0 ? loaded.work.w / s.width_mm : 1;
-    ctx.strokeStyle = "#39d7e8";
-    ctx.lineWidth = 1;
-    for (const poly of result.polys) {
-      for (const ring of [poly.outer, ...poly.holes]) {
-        if (ring.length < 3) continue;
-        ctx.beginPath();
-        ctx.moveTo(ring[0].x * pxPerMm, ring[0].y * pxPerMm);
-        for (let i = 1; i < ring.length; i++) ctx.lineTo(ring[i].x * pxPerMm, ring[i].y * pxPerMm);
-        ctx.closePath();
-        ctx.stroke();
+    const shown = canvas.clientWidth || canvas.width;
+    const scale = canvas.width / shown;
+
+    // Drawn twice. The path runs exactly along the edge between the white
+    // sticker and the dark ground, so a single colour is half-lost whichever
+    // one it is; a dark casing under the cyan reads against both.
+    const strokeAll = (colour: string, cssWidth: number) => {
+      ctx.strokeStyle = colour;
+      ctx.lineWidth = cssWidth * scale;
+      for (const poly of result.polys) {
+        for (const ring of [poly.outer, ...poly.holes]) {
+          if (ring.length < 3) continue;
+          ctx.beginPath();
+          ctx.moveTo(ring[0].x * pxPerMm, ring[0].y * pxPerMm);
+          for (let i = 1; i < ring.length; i++) {
+            ctx.lineTo(ring[i].x * pxPerMm, ring[i].y * pxPerMm);
+          }
+          ctx.closePath();
+          ctx.stroke();
+        }
       }
-    }
-  }, [loaded, result, composite, s.width_mm]);
+    };
+    ctx.lineJoin = "round";
+    strokeAll("#0b1020", 3);
+    strokeAll("#39d7e8", 1.5);
+  }, [loaded, result, composite, s.width_mm, paneWidth]);
 
   /** Full-resolution artwork as a PNG, cut to the path. */
   const renderPng = useCallback(async (): Promise<{ blob: Blob; w_mm: number; h_mm: number } | null> => {
@@ -436,7 +482,14 @@ export function CutPathPanel() {
         {loaded && (
           <p className="readout">
             {result
-              ? `${result.stats.stickers} sticker${result.stats.stickers === 1 ? "" : "s"} found · ${result.stats.nodes} nodes · ${result.stats.w_mm.toFixed(1)} × ${result.stats.h_mm.toFixed(1)} mm${busy ? " · working…" : ` · ${result.ms} ms`}`
+              ? `${result.stats.stickers} sticker${result.stats.stickers === 1 ? "" : "s"} found · ${result.stats.nodes} nodes · ${result.stats.w_mm.toFixed(1)} × ${result.stats.h_mm.toFixed(1)} mm${
+                  // The gap against what the border needs. Shown as a pair
+                  // because neither number means anything alone, and together
+                  // they are the whole of why a sheet welds into one path.
+                  Number.isFinite(result.stats.gap_mm)
+                    ? ` · ${result.stats.gap_mm.toFixed(1)} mm apart, ${result.stats.clearance_mm.toFixed(1)} mm needed`
+                    : ""
+                }${busy ? " · working…" : ` · ${result.ms} ms`}`
               : "Tracing…"}
           </p>
         )}
@@ -482,8 +535,19 @@ export function CutPathPanel() {
                   type="number"
                   min="1"
                   step="0.5"
-                  value={s.width_mm}
-                  onChange={(e) => patch({ width_mm: Number(e.target.value) || 1 })}
+                  value={widthDraft ?? String(s.width_mm)}
+                  onChange={(e) => {
+                    const text = e.target.value;
+                    setWidthDraft(text);
+                    // Half-typed values are left on screen but not acted on.
+                    // Anything positive commits immediately, so the preview
+                    // still tracks the number as it is typed.
+                    const n = Number(text);
+                    if (text.trim() !== "" && Number.isFinite(n) && n > 0) {
+                      patch({ width_mm: n });
+                    }
+                  }}
+                  onBlur={() => setWidthDraft(null)}
                   aria-label="Finished width in millimetres"
                 />
               </div>
@@ -679,6 +743,38 @@ export function CutPathPanel() {
                 The PNG bakes the path as the alpha boundary, which is what Design Space
                 regenerates its contours from.
               </p>
+              <details className="hint">
+                <summary>How to actually cut this</summary>
+                <p>
+                  All three routes are <strong>print then cut</strong>: the printer lays
+                  the artwork down, the machine finds the sheet and cuts the path you
+                  built here. Print at 100% — no “fit to page”, no scaling — or the
+                  millimetres stop being millimetres and the cut lands off the artwork.
+                </p>
+                <p>
+                  <strong>Cricut.</strong> Upload the PNG to Design Space as a Print
+                  Then Cut image. It regenerates the cut line from the transparent
+                  edge, so the path is already baked in — do not add an offset in
+                  Design Space, or you get this border plus another one.
+                </p>
+                <p>
+                  <strong>Silhouette.</strong> Open the SVG in Studio. The cut layer
+                  comes in as its own group: set it to cut and set the artwork layer to
+                  no-cut. Use Studio’s own registration marks in preference to the
+                  marks in the PDF here, which are still unverified.
+                </p>
+                <p>
+                  <strong>Anything else</strong> — a plotter, a print shop, a die
+                  maker: send the SVG. It is real geometry in millimetres with the cut
+                  on a separate layer, which is what a cutter wants and what a raster
+                  never is.
+                </p>
+                <p>
+                  Cut one sheet before cutting forty. Print the reference card and
+                  measure its 100 mm rule first: if that comes out at 100 mm, the
+                  printer is honest and everything else here will be too.
+                </p>
+              </details>
             </section>
 
             {result && result.stats.warnings.length > 0 && (
