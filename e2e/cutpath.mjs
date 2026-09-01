@@ -453,6 +453,56 @@ const run = async () => {
   await page.fill('input[aria-label="Finished width in millimetres"]', "180");
   await settled(page, tiny.raw);
 
+  // Typing a width, rather than filling it in one go. Clearing the box used to
+  // put a 1 back on the first keystroke, so the 1 you were deleting reappeared
+  // as fast as you deleted it and 210 was unreachable.
+  const widthBox = page.locator('input[aria-label="Finished width in millimetres"]');
+  await widthBox.click();
+  await page.keyboard.press("ControlOrMeta+a");
+  await page.keyboard.press("Backspace");
+  const cleared = await widthBox.inputValue();
+  if (cleared === "") pass("the width box can be cleared");
+  else fail(`clearing the width box left "${cleared}"`);
+
+  await page.keyboard.type("210");
+  const typed = await widthBox.inputValue();
+  if (typed === "210") pass("and typed straight into: 210");
+  else fail(`typing 210 gave "${typed}"`);
+
+  const at210 = await settled(page, await page.locator(".readout").innerText());
+  // The readout is the cut path, not the sheet: the artwork scales with the
+  // width while the 1.5 mm border does not. 176 mm of path at 180 mm is
+  // 173 mm of artwork, so at 210 it is 173 x 210/180 + 3 = 204.8.
+  if (near(at210.w_mm, 204.8, 1)) pass(`the typed width takes effect (${at210.w_mm} mm)`);
+  else fail(`typed 210 mm but the path is ${at210.w_mm} mm, expected 204.8`);
+
+  await page.fill('input[aria-label="Finished width in millimetres"]', "180");
+  await settled(page, at210.raw);
+
+  // The caption promises cyan is the cut path, so there has to be cyan. It
+  // used to be drawn one canvas pixel wide, which on a sheet worked at 1400 px
+  // and shown in half that is half a screen pixel — antialiased into nothing,
+  // on the one boundary where it had white on one side and dark on the other.
+  const cyan = await page.evaluate(() => {
+    const c = document.querySelectorAll("canvas")[1];
+    const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+    let n = 0;
+    for (let i = 0; i < d.length; i += 4) {
+      // Near #39d7e8: strong blue and green, weak red.
+      if (d[i] < 130 && d[i + 1] > 150 && d[i + 2] > 180) n++;
+    }
+    return { n, total: d.length / 4 };
+  });
+  // The threshold discriminates, rather than merely being cleared: this sheet
+  // measured 1518 cyan px with the one-canvas-pixel stroke and 4353 with the
+  // scaled stroke and its casing. A guard set below the former would pass on
+  // the bug it exists to catch — which the first version of this check did.
+  if (cyan.n > 3000) {
+    pass(`the cut path is visibly cyan (${cyan.n} px)`);
+  } else {
+    fail(`only ${cyan.n} cyan px on the result canvas — the path is too faint to see`);
+  }
+
   // ---- P7: the exports
   const [svgDl] = await Promise.all([
     page.waitForEvent("download", { timeout: 60000 }),
