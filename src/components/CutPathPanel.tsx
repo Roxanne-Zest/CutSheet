@@ -436,7 +436,14 @@ export function CutPathPanel() {
         {loaded && (
           <p className="readout">
             {result
-              ? `${result.stats.stickers} sticker${result.stats.stickers === 1 ? "" : "s"} found · ${result.stats.nodes} nodes · ${result.stats.w_mm.toFixed(1)} × ${result.stats.h_mm.toFixed(1)} mm${busy ? " · working…" : ` · ${result.ms} ms`}`
+              ? `${result.stats.stickers} sticker${result.stats.stickers === 1 ? "" : "s"} found · ${result.stats.nodes} nodes · ${result.stats.w_mm.toFixed(1)} × ${result.stats.h_mm.toFixed(1)} mm${
+                  // The gap against what the border needs. Shown as a pair
+                  // because neither number means anything alone, and together
+                  // they are the whole of why a sheet welds into one path.
+                  Number.isFinite(result.stats.gap_mm)
+                    ? ` · ${result.stats.gap_mm.toFixed(1)} mm apart, ${result.stats.clearance_mm.toFixed(1)} mm needed`
+                    : ""
+                }${busy ? " · working…" : ` · ${result.ms} ms`}`
               : "Tracing…"}
           </p>
         )}

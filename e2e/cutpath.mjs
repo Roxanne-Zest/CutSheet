@@ -413,6 +413,46 @@ const run = async () => {
   if (six.stickers === 6) pass("six stickers on one sheet give six separate paths");
   else fail(`sheet of six traced as ${six.stickers} path(s)`);
 
+  // The readout carries the two numbers that decide whether the sheet welds.
+  if (/[\d.]+ mm apart, [\d.]+ mm needed/.test(six.raw)) {
+    pass(`the readout shows the gap against what the border needs`);
+  } else {
+    fail(`no gap in the readout: ${six.raw}`);
+  }
+
+  // The bug this was built for: the same sheet told it is one sticker wide.
+  // Nothing upstream changes — the gaps just scale down with the width until
+  // the blade radius closes them.
+  await page.fill('input[aria-label="Finished width in millimetres"]', "48");
+  const welded = await settled(page, six.raw);
+  if (welded.stickers < 6) {
+    pass(`a one-sticker width welds the sheet: ${welded.stickers} path(s) from 6`);
+  } else {
+    fail(`expected the sheet to weld at 48 mm, got ${welded.stickers} paths`);
+  }
+
+  const said = (await page.locator("p.warn").allInnerTexts()).join(" ");
+  if (/merged into/.test(said)) pass("the weld is reported as a merge");
+  else fail(`the weld was not reported as a merge: ${said}`);
+  if (!/disappeared/.test(said)) pass("and not as a disappearance");
+  else fail(`the weld was called a disappearance: ${said}`);
+  // At 48 mm these are 2.2 mm apart — tight, but a layout somebody could have
+  // meant. The width is only questioned once the spacing stops being physical.
+  if (!/meant to be one sticker/i.test(said)) pass("a merely tight sheet does not accuse the width");
+  else fail(`the width was questioned at a plausible 2.2 mm spacing: ${said}`);
+
+  await page.fill('input[aria-label="Finished width in millimetres"]', "15");
+  const tiny = await settled(page, welded.raw);
+  const saidTiny = (await page.locator("p.warn").allInnerTexts()).join(" ");
+  if (/meant to be one sticker/i.test(saidTiny)) {
+    pass(`sub-millimetre spacing questions the width (${tiny.raw.match(/([\d.]+) mm apart/)?.[1]} mm apart)`);
+  } else {
+    fail(`the width was not questioned at sub-millimetre spacing: ${saidTiny}`);
+  }
+
+  await page.fill('input[aria-label="Finished width in millimetres"]', "180");
+  await settled(page, tiny.raw);
+
   // ---- P7: the exports
   const [svgDl] = await Promise.all([
     page.waitForEvent("download", { timeout: 60000 }),
