@@ -26,8 +26,9 @@ import type { CropContext } from "./lib/geometry";
 import { buildPrintItems, resolveShape } from "./lib/printItems";
 import { dropCount, formatChangeDrops, remapTemplate } from "./lib/layoutChange";
 import { generatePdf, packProject } from "./lib/pdf";
-import { loadSource, readImageSize } from "./lib/raster";
+import { loadSource, readImageMeta, graySquare } from "./lib/raster";
 import { takenAtOf } from "./lib/exif";
+import { SIG_SIZE, signatureOf } from "./lib/dedupe";
 import type { ArrangeReport } from "./lib/autoLayout";
 import type { Source } from "./lib/raster";
 import * as db from "./lib/db";
@@ -131,6 +132,43 @@ export function JournalApp() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [assets]);
+
+  /**
+   * Fill in near-duplicate signatures for photos added before they existed.
+   *
+   * New photos get one at import; these are the ones already in the browser,
+   * and they are signed off the bitmap that has just been decoded for the
+   * screen rather than by decoding them a second time.
+   */
+  useEffect(() => {
+    let cancelled = false;
+    const missing = assets.filter((a) => !a.thumb && sources.has(a.id));
+    if (missing.length === 0) return;
+
+    void (async () => {
+      const signed: Asset[] = [];
+      for (const a of missing) {
+        const src = sources.get(a.id);
+        if (!src) continue;
+        try {
+          const gray = graySquare(src.bitmap, src.w_px, src.h_px);
+          if (gray.length === 0) continue;
+          const next = { ...a, ...signatureOf(gray, SIG_SIZE, SIG_SIZE) };
+          await db.saveAsset(next);
+          signed.push(next);
+        } catch {
+          // Unsignable is not an error: it simply never counts as a duplicate.
+        }
+      }
+      if (signed.length === 0 || cancelled) return;
+      const byId = new Map(signed.map((a) => [a.id, a]));
+      setAssets((list) => list.map((a) => byId.get(a.id) ?? a));
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [assets, sources]);
 
   // ---- autosave
   useEffect(() => {
@@ -442,7 +480,7 @@ export function JournalApp() {
     for (const file of Array.from(files)) {
       if (!file.type.startsWith("image/")) continue;
       try {
-        const [size, when] = await Promise.all([readImageSize(file), takenAtOf(file)]);
+        const [size, when] = await Promise.all([readImageMeta(file), takenAtOf(file)]);
         const asset: Asset = {
           id: uid("ast"),
           name: file.name,

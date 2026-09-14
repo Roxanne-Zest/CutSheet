@@ -34,6 +34,9 @@ const photoOf = (a: Asset): TripPhoto => ({
   h_px: a.h_px,
   takenAt: a.takenAt,
   timeSource: a.timeSource,
+  thumb: a.thumb,
+  sharpness: a.sharpness,
+  contrast: a.contrast,
 });
 
 const ORDER_NOTE: Record<ArrangeReport["ordering"], string> = {
@@ -112,6 +115,15 @@ export function TripArranger(props: TripArrangerProps) {
             New spread each day
           </label>
 
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={options.skipDuplicates}
+              onChange={(e) => set({ skipDuplicates: e.target.checked })}
+            />
+            One photo per burst
+          </label>
+
           <div className="field">
             <span>
               <span>Most photos per spread</span>
@@ -143,6 +155,13 @@ export function TripArranger(props: TripArrangerProps) {
               <b>{report.spreads.length}</b> spread
               {report.spreads.length === 1 ? "" : "s"}
             </div>
+            {report.skipped.length > 0 && (
+              <div>
+                <b>{report.skipped.length}</b> near-duplicate
+                {report.skipped.length === 1 ? "" : "s"} skipped across{" "}
+                <b>{report.bursts}</b> burst{report.bursts === 1 ? "" : "s"}
+              </div>
+            )}
             {report.soft.red + report.soft.amber > 0 && (
               <div className="warn">
                 {report.soft.red > 0 && `${report.soft.red} will print under 200 dpi`}
@@ -160,6 +179,21 @@ export function TripArranger(props: TripArrangerProps) {
           </div>
 
           {photos.length > 0 && <p className="hint">{ORDER_NOTE[report.ordering]}</p>}
+
+          {options.skipDuplicates && report.skipped.length > 0 && (
+            <p className="hint">
+              Where you took the same shot several times, the sharpest one goes on
+              the page. The rest stay in your tray — nothing is deleted, and you can
+              drop any of them into a slot yourself.
+            </p>
+          )}
+          {report.cannotCompare && photos.length > 1 && (
+            <p className="hint warn">
+              These photos have nothing to compare — either they were added before
+              this could read them, or there is no detail in them to tell apart.
+              Re-adding them will give it something to work with.
+            </p>
+          )}
 
           {confirming ? (
             <div className="confirm">

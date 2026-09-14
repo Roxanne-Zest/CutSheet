@@ -37,6 +37,14 @@ first pass:
   names never do. No capture time, and it falls back to the file date, then to
   the name, and says which it used.
 - **Spreads break where the days break**, unless you turn that off.
+- **One photo per burst.** A trip is forty photographs and a hundred and sixty
+  second attempts. Each photo carries a small signature — an 8×8 thumbnail with
+  the exposure normalised out — and shots that look alike *and* were taken
+  within two minutes of each other are treated as one, with the sharpest kept.
+  Both halves matter: the signature alone would collapse two photographs that
+  happen to share a horizon, and the clock alone would collapse a burst with
+  whatever you turned round and photographed next. The ones it sets aside stay
+  in your tray; nothing is deleted.
 - **The layout is chosen to suit the photos**, not the other way round: it
   scores every layout in your format on how much of each photo the crop would
   throw away and how soft it would print at that size, and works back from the

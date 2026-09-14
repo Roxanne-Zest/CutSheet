@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   arrangeTrip,
+  DEFAULT_ARRANGE,
   aspectMismatch,
   bestTemplateFor,
   dayCount,
@@ -235,7 +236,7 @@ describe("arranging a whole trip", () => {
     const r = arrangeTrip(
       [photo("a", { takenAt: t(1, 18) }), photo("b", { takenAt: t(2, 9) })],
       templates,
-      { newSpreadEachDay: false, maxPerSpread: 6 },
+      { newSpreadEachDay: false, maxPerSpread: 6, skipDuplicates: true },
     );
     expect(r.spreads).toHaveLength(1);
     expect(r.spreads[0].photoIds).toEqual(["a", "b"]);
@@ -295,6 +296,91 @@ describe("arranging a whole trip", () => {
     const portraitOnly = tpl("p", [slot("S1", 0, 0, 30, 40)]);
     const r = arrangeTrip([photo("a")], [portraitOnly]);
     expect(r.spreads[0].placements[0].rotation).toBe(0);
+  });
+});
+
+describe("bursts", () => {
+  const one = tpl("one", [slot("S1", 0, 0, 40, 30)]);
+  const two = tpl("two", [slot("S1", 0, 0, 40, 30), slot("S2", 0, 40, 40, 30)]);
+  const templates = [one, two];
+
+  /**
+   * A photo with a signature. The thumbnail is the actual comparison, so the
+   * tests build real ones: `shot` is a scene, and `again` is the same scene
+   * one cell brighter — a second attempt at it.
+   */
+  const shot = (id: string, seed: number, takenAt: number, sharp = 0.05): TripPhoto => {
+    let thumb = "";
+    for (let i = 0; i < 64; i++) {
+      thumb += (((i * 37 + seed * 91) % 200) + 20).toString(16).padStart(2, "0");
+    }
+    return { ...photo(id, { takenAt }), thumb, sharpness: sharp, contrast: 30 };
+  };
+
+  const again = (id: string, seed: number, takenAt: number, sharp = 0.05): TripPhoto => {
+    const base = shot(id, seed, takenAt, sharp);
+    // Nudge every cell by one, which is nothing next to the threshold.
+    let thumb = "";
+    for (let i = 0; i < 64; i++) {
+      const v = parseInt(base.thumb!.slice(i * 2, i * 2 + 2), 16);
+      thumb += Math.min(255, v + 1).toString(16).padStart(2, "0");
+    }
+    return { ...base, thumb };
+  };
+
+  it("lays out one of a burst and says how many it set aside", () => {
+    const r = arrangeTrip(
+      [
+        shot("a", 1, t(1, 9)),
+        again("a2", 1, t(1, 9) + 2000),
+        again("a3", 1, t(1, 9) + 4000),
+        shot("b", 2, t(1, 11)),
+      ],
+      templates,
+    );
+    expect(r.spreads.flatMap((s) => s.photoIds)).toEqual(["a", "b"]);
+    expect(r.skipped.map((p) => p.id)).toEqual(["a2", "a3"]);
+    expect(r.bursts).toBe(1);
+  });
+
+  it("keeps the sharpest of the burst, not the first", () => {
+    const r = arrangeTrip(
+      [
+        shot("soft", 1, t(1, 9), 0.02),
+        again("sharp", 1, t(1, 9) + 2000, 0.09),
+      ],
+      templates,
+    );
+    expect(r.spreads.flatMap((s) => s.photoIds)).toEqual(["sharp"]);
+    expect(r.skipped.map((p) => p.id)).toEqual(["soft"]);
+  });
+
+  it("lays out every attempt when asked to", () => {
+    const r = arrangeTrip(
+      [shot("a", 1, t(1, 9)), again("a2", 1, t(1, 9) + 2000)],
+      templates,
+      { ...DEFAULT_ARRANGE, skipDuplicates: false },
+    );
+    expect(r.spreads.flatMap((s) => s.photoIds)).toEqual(["a", "a2"]);
+    expect(r.skipped).toEqual([]);
+    expect(r.bursts).toBe(0);
+  });
+
+  it("says when there was nothing it could compare", () => {
+    // Photos added before signatures existed. Skipping is on, and honestly
+    // does nothing, so the UI needs to be able to say so.
+    const r = arrangeTrip([photo("old1"), photo("old2")], templates);
+    expect(r.cannotCompare).toBe(true);
+    expect(r.skipped).toEqual([]);
+    expect(r.spreads.flatMap((s) => s.photoIds)).toEqual(["old1", "old2"]);
+  });
+
+  it("does not claim it cannot compare when skipping is off", () => {
+    const r = arrangeTrip([photo("old1")], templates, {
+      ...DEFAULT_ARRANGE,
+      skipDuplicates: false,
+    });
+    expect(r.cannotCompare).toBe(false);
   });
 });
 
