@@ -86,6 +86,14 @@ export type CutPathStats = {
   h_mm: number;
   /** RDP tolerance actually used — raised automatically if the budget bit. */
   tolerance_mm: number;
+  /**
+   * Closest approach between two traced shapes, in mm. Infinity under two
+   * shapes. This is the number that predicts whether the border welds the
+   * sheet together, so it is worth showing before it does.
+   */
+  gap_mm: number;
+  /** The gap the current border and blade radius need to keep shapes apart. */
+  clearance_mm: number;
   warnings: string[];
 };
 

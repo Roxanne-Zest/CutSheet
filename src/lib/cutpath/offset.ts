@@ -189,12 +189,12 @@ export const buildBorder = (
     warnings.push(
       "Nothing survived the border. A negative border larger than the artwork leaves no path to cut.",
     );
-  } else if (cuttable.length < polys.length) {
-    const lost = polys.length - cuttable.length;
-    warnings.push(
-      `${lost} shape${lost === 1 ? "" : "s"} disappeared: too small to survive a ${o.border_mm} mm border at a ${o.bladeRadius_mm} mm blade radius.`,
-    );
   }
+  // A count that drops without reaching zero is not reported here. It has two
+  // opposite causes — shapes too small to survive, and shapes so close they
+  // welded together — and telling them apart needs the gap between the shapes,
+  // which the pipeline measures. Guessing here is what made this stage claim
+  // a sheet of thirty pens had "disappeared" when it had merged into two.
 
   return { polys: cuttable, warnings };
 };

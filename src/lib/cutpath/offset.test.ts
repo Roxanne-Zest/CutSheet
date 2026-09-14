@@ -238,13 +238,18 @@ describe("the border stage as a whole", () => {
     expect(r.warnings.join(" ")).toMatch(/no path to cut/);
   });
 
-  it("says so when only some of the stickers survive", () => {
+  it("leaves a dropped shape for the pipeline to explain", () => {
+    // This stage can see that the count fell but not why. A shape too small to
+    // survive the border and two shapes welded together by it both land here
+    // as one path out of two, and the fixes are opposite. Telling them apart
+    // needs the gap between the shapes, so the pipeline says it — see
+    // crowdingWarnings in pipeline.test.ts.
     const r = buildBorder([square(0, 0, 30, 30), square(60, 0, 1.2, 1.2)], {
       border_mm: -0.8,
       bladeRadius_mm: 0.5,
       keepHoles: false,
     });
     expect(r.polys).toHaveLength(1);
-    expect(r.warnings.join(" ")).toMatch(/disappeared/);
+    expect(r.warnings).toEqual([]);
   });
 });

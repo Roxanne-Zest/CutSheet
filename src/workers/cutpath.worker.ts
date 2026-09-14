@@ -1,6 +1,6 @@
 import { runCutPath } from "../lib/cutpath/pipeline";
 import { rasterisePolys } from "../lib/cutpath/composite";
-import type { CutPathSettings, Mask, Poly } from "../lib/cutpath/types";
+import type { CutPathSettings, CutPathStats, Mask, Poly } from "../lib/cutpath/types";
 
 /**
  * P8 — the pipeline off the main thread.
@@ -29,15 +29,13 @@ export type CutPathResponse = {
   cutBits: ArrayBuffer;
   maskW: number;
   maskH: number;
-  stats: {
-    stickers: number;
-    source: "alpha" | "background" | "ink";
-    nodes: number;
-    w_mm: number;
-    h_mm: number;
-    tolerance_mm: number;
-    warnings: string[];
-  };
+  /**
+   * The pipeline's own stats type, not a copy of its shape. A copy compiles
+   * happily while it drifts — a field added upstream simply never reaches the
+   * UI, and the error surfaces at the far end in a component that looks wrong
+   * but isn't.
+   */
+  stats: CutPathStats;
   ms: number;
 };
 

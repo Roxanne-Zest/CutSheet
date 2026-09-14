@@ -101,6 +101,66 @@ describe("the pipeline end to end", () => {
     expect(readout(r)).toMatch(/^6 stickers found · \d+ nodes/);
   });
 
+  it("welds a sheet together when the width describes one sticker", () => {
+    // The same six stickers, told they span 48 mm rather than 180. Nothing
+    // upstream changes — the mask and the trace are identical — but every gap
+    // scales down with the width until the blade radius closes them.
+    const wrong = runCutPath(sheetOfSix(), settings({ width_mm: 48, border_mm: 1.5 }));
+    const right = runCutPath(sheetOfSix(), settings({ width_mm: 180, border_mm: 1.5 }));
+
+    expect(right.stats.stickers).toBe(6);
+    expect(wrong.stats.stickers).toBeLessThan(6);
+  });
+
+  it("reports a weld as a merge, naming the gap and the clearance", () => {
+    const r = runCutPath(sheetOfSix(), settings({ width_mm: 48, border_mm: 1.5 }));
+    const said = r.stats.warnings.join(" ");
+
+    // The cause, not a guess at it. Calling this a disappearance sends you to
+    // enlarge artwork that was never too small.
+    expect(said).toMatch(/merged into/);
+    expect(said).not.toMatch(/disappeared/);
+    // And the two numbers that explain it.
+    expect(said).toContain(r.stats.gap_mm.toFixed(1));
+    expect(said).toContain(r.stats.clearance_mm.toFixed(1));
+  });
+
+  it("questions the width when shapes are closer than a sheet is ever laid out", () => {
+    const r = runCutPath(sheetOfSix(), settings({ width_mm: 12, border_mm: 0 }));
+    expect(r.stats.gap_mm).toBeLessThan(1);
+    expect(r.stats.warnings.join(" ")).toMatch(/if that was meant to be one sticker/i);
+  });
+
+  it("leaves the width alone when the sheet is plausibly laid out", () => {
+    const r = runCutPath(sheetOfSix(), settings({ width_mm: 180, border_mm: 1.5 }));
+    expect(r.stats.warnings.join(" ")).not.toMatch(/one sticker/i);
+  });
+
+  it("reports the gap and the clearance whether or not anything went wrong", () => {
+    const r = runCutPath(sheetOfSix(), settings({ width_mm: 180, border_mm: 1.5 }));
+    // Discs 22 px in radius, centres 60 px apart, on a 360 px image at 180 mm:
+    // 16 px of background between them, so 8 mm nominal. Measured at 8.5,
+    // because marching squares puts the contour half a pixel inside the last
+    // filled pixel at each edge — a whole pixel wider per gap, and constant
+    // whatever the smoothing is set to.
+    expect(r.stats.gap_mm).toBeCloseTo(8.5, 1);
+    expect(r.stats.clearance_mm).toBe(5);
+  });
+
+  it("says nothing about crowding for a single sticker", () => {
+    const r = runCutPath(stickerWithFakeBorder(), settings());
+    expect(r.stats.gap_mm).toBe(Infinity);
+    expect(r.stats.warnings.join(" ")).not.toMatch(/merged|apart/);
+  });
+
+  it("warns before the weld, when the border is nearly too big", () => {
+    // Gap is 8 mm; a 2.5 mm border at a 1 mm blade needs 7 mm. It survives,
+    // but the next nudge of the slider is the one that welds the sheet.
+    const r = runCutPath(sheetOfSix(), settings({ width_mm: 180, border_mm: 2.5 }));
+    expect(r.stats.stickers).toBe(6);
+    expect(r.stats.warnings.join(" ")).toMatch(/^Close:|Close:/);
+  });
+
   it("honours the width the user typed, exactly", () => {
     for (const width_mm of [30, 48, 96]) {
       const r = runCutPath(stickerWithFakeBorder(), settings({ width_mm, border_mm: 0 }));
