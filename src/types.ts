@@ -93,6 +93,15 @@ export type Asset = {
    */
   takenAt?: number;
   timeSource?: "exif" | "file";
+  /**
+   * Near-duplicate signature — an 8 x 8 normalised thumbnail, how sharp the
+   * photo is, and how much tone it has to compare at all. See `dedupe.ts`.
+   * Optional: photos added before this carry none and are never treated as
+   * anybody's duplicate.
+   */
+  thumb?: string;
+  sharpness?: number;
+  contrast?: number;
 };
 
 /**

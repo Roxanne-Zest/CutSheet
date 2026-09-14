@@ -63,20 +63,64 @@ const withExifDate = (jpeg, text) => {
   return Buffer.concat([jpeg.subarray(0, 2), app1, jpeg.subarray(2)]);
 };
 
-/** A photo of one flat colour, so it can be recognised again on the page. */
-const makeJpeg = (page, w, h, colour) =>
+/**
+ * A photograph with structure in it, because the near-duplicate signature is a
+ * normalised grayscale thumbnail and a flat colour has nothing to sign.
+ *
+ * Each one is a different arrangement of sky, horizon, tower and sun, tinted a
+ * different hue, so no two are duplicates of each other and each is still
+ * recognisable by its average colour when it comes back off the page. Passing
+ * the same `shape` twice with a small `shift` makes a second attempt at one
+ * shot — a burst.
+ */
+const makeJpeg = (page, w, h, hue, shape, shift = 0) =>
   page.evaluate(
-    async ([w, h, colour]) => {
+    async ([w, h, hue, shape, shift]) => {
       const c = document.createElement("canvas");
       c.width = w;
       c.height = h;
       const x = c.getContext("2d");
-      x.fillStyle = colour;
+      const u = Math.min(w, h) / 64;
+      const dx = shift * u;
+
+      const g = x.createLinearGradient(0, 0, 0, h);
+      g.addColorStop(0, hue);
+      g.addColorStop(1, "#f2f2f2");
+      x.fillStyle = g;
       x.fillRect(0, 0, w, h);
+
+      const horizon = shape.horizon * u + dx;
+      x.fillStyle = "#3a3a3a";
+      x.fillRect(shape.towerX * u + dx, horizon - shape.towerH * u, shape.towerW * u, shape.towerH * u);
+
+      x.fillStyle = "#fdfbe8";
+      x.beginPath();
+      x.arc(shape.sunX * u + dx, 12 * u, 6 * u, 0, Math.PI * 2);
+      x.fill();
+
+      x.fillStyle = hue;
+      x.globalAlpha = 0.55;
+      x.fillRect(0, horizon, w, h - horizon);
+      x.globalAlpha = 1;
+
       const blob = await new Promise((r) => c.toBlob(r, "image/jpeg", 0.95));
-      return Array.from(new Uint8Array(await blob.arrayBuffer()));
+      const bytes = Array.from(new Uint8Array(await blob.arrayBuffer()));
+
+      // The average colour as rendered, so identifying it later needs no guess
+      // about what the recipe averages out to.
+      const d = x.getImageData(0, 0, w, h).data;
+      let r = 0, gg = 0, b = 0;
+      const step = 4 * Math.max(1, Math.floor(d.length / 4 / 2000));
+      let n = 0;
+      for (let i = 0; i < d.length; i += step) {
+        r += d[i];
+        gg += d[i + 1];
+        b += d[i + 2];
+        n += 1;
+      }
+      return { bytes, avg: [Math.round(r / n), Math.round(gg / n), Math.round(b / n)] };
     },
-    [w, h, colour],
+    [w, h, hue, shape, shift],
   );
 
 /** Average colour of every slot canvas on the current spread, in order. */
@@ -99,7 +143,7 @@ const slotColours = (page) =>
     }),
   );
 
-/** Which fixture colour this is, by nearest match — JPEG shifts them a little. */
+/** Which fixture this is, by nearest average colour. */
 const nameOf = (rgb, palette) => {
   let best = null;
   let bestD = Infinity;
@@ -110,7 +154,7 @@ const nameOf = (rgb, palette) => {
       best = p;
     }
   }
-  return bestD < 40 ? best.id : `unknown(${rgb})`;
+  return bestD < 55 ? best.id : `unknown(${rgb})`;
 };
 
 const run = async () => {
@@ -132,46 +176,86 @@ const run = async () => {
   await page.waitForSelector(".layouts button");
 
   /**
-   * Nine photos over three days. The names run backwards against the clock and
-   * two "cameras" interleave, so anything that sorts by name or by upload order
-   * gets a different answer from anything that reads the file.
+   * Nine photographs over three days, each a different arrangement of the same
+   * elements so no two are duplicates. The names run backwards against the
+   * clock and two "cameras" interleave, so anything that sorts by name or by
+   * upload order gets a different answer from anything that reads the file.
+   *
+   * `d2b` is then taken three times — the burst this trip is meant to survive.
    */
   const trip = [
-    { id: "d1a", day: 1, hour: 9, colour: "#c1121f", portrait: false, name: "IMG_9001.jpg" },
-    { id: "d1b", day: 1, hour: 11, colour: "#e85d04", portrait: true, name: "DSC_0500.jpg" },
-    { id: "d1c", day: 1, hour: 16, colour: "#ffba08", portrait: false, name: "IMG_9000.jpg" },
-    { id: "d2a", day: 2, hour: 8, colour: "#70e000", portrait: false, name: "DSC_0100.jpg" },
-    { id: "d2b", day: 2, hour: 12, colour: "#008000", portrait: true, name: "IMG_8000.jpg" },
-    { id: "d2c", day: 2, hour: 14, colour: "#00b4d8", portrait: false, name: "DSC_0099.jpg" },
-    { id: "d2d", day: 2, hour: 19, colour: "#0077b6", portrait: false, name: "IMG_7999.jpg" },
-    { id: "d3a", day: 3, hour: 10, colour: "#7209b7", portrait: false, name: "DSC_0001.jpg" },
-    { id: "d3b", day: 3, hour: 15, colour: "#c77dff", portrait: true, name: "IMG_0001.jpg" },
+    { id: "d1a", day: 1, hour: 9, min: 30, colour: "#c1121f", portrait: false, name: "IMG_9001.jpg",
+      shape: { horizon: 40, towerX: 8, towerW: 10, towerH: 18, sunX: 48 } },
+    { id: "d1b", day: 1, hour: 11, min: 30, colour: "#e85d04", portrait: true, name: "DSC_0500.jpg",
+      shape: { horizon: 24, towerX: 44, towerW: 8, towerH: 14, sunX: 14 } },
+    { id: "d1c", day: 1, hour: 16, min: 30, colour: "#ffba08", portrait: false, name: "IMG_9000.jpg",
+      shape: { horizon: 50, towerX: 26, towerW: 20, towerH: 34, sunX: 6 } },
+    { id: "d2a", day: 2, hour: 8, min: 30, colour: "#70e000", portrait: false, name: "DSC_0100.jpg",
+      shape: { horizon: 18, towerX: 2, towerW: 14, towerH: 10, sunX: 56 } },
+    { id: "d2b", day: 2, hour: 12, min: 30, colour: "#008000", portrait: true, name: "IMG_8000.jpg",
+      shape: { horizon: 44, towerX: 50, towerW: 12, towerH: 30, sunX: 26 } },
+    { id: "d2c", day: 2, hour: 14, min: 30, colour: "#00b4d8", portrait: false, name: "DSC_0099.jpg",
+      shape: { horizon: 32, towerX: 16, towerW: 6, towerH: 26, sunX: 40 } },
+    { id: "d2d", day: 2, hour: 19, min: 30, colour: "#0077b6", portrait: false, name: "IMG_7999.jpg",
+      shape: { horizon: 56, towerX: 36, towerW: 18, towerH: 12, sunX: 20 } },
+    { id: "d3a", day: 3, hour: 10, min: 30, colour: "#7209b7", portrait: false, name: "DSC_0001.jpg",
+      shape: { horizon: 28, towerX: 30, towerW: 10, towerH: 22, sunX: 52 } },
+    { id: "d3b", day: 3, hour: 15, min: 30, colour: "#c77dff", portrait: true, name: "IMG_0001.jpg",
+      shape: { horizon: 36, towerX: 20, towerW: 24, towerH: 16, sunX: 34 } },
   ];
 
+  /** Two more attempts at d2b, seconds later and half a step to one side. */
+  const burst = [
+    { ...trip[4], id: "d2b-2", burstOf: "d2b", name: "IMG_8001.jpg", min: 30, sec: 3, shift: 1 },
+    { ...trip[4], id: "d2b-3", burstOf: "d2b", name: "IMG_8002.jpg", min: 30, sec: 6, shift: 2 },
+  ];
+
+  const palette = [];
   const files = [];
-  for (const p of trip) {
-    const bytes = Buffer.from(
-      await makeJpeg(page, p.portrait ? 1800 : 2400, p.portrait ? 2400 : 1800, p.colour),
+  for (const p of [...trip, ...burst]) {
+    const made = await makeJpeg(
+      page,
+      p.portrait ? 1800 : 2400,
+      p.portrait ? 2400 : 1800,
+      p.colour,
+      p.shape,
+      p.shift ?? 0,
     );
-    const stamp = `2024:07:0${p.day} ${String(p.hour).padStart(2, "0")}:30:00`;
+    // The burst frames are the same photograph, so they average to very nearly
+    // the same colour and cannot be told apart this way — which is precisely
+    // why they are duplicates. They share one identity here; which of the three
+    // survives is the keeper rule's job and is pinned in dedupe.test.ts.
+    palette.push({ id: p.burstOf ?? p.id, rgb: made.avg });
+    const stamp = `2024:07:0${p.day} ${String(p.hour).padStart(2, "0")}:${String(
+      p.min,
+    ).padStart(2, "0")}:${String(p.sec ?? 0).padStart(2, "0")}`;
     files.push({
       name: p.name,
       mimeType: "image/jpeg",
-      buffer: withExifDate(bytes, stamp),
+      buffer: withExifDate(Buffer.from(made.bytes), stamp),
     });
   }
 
   // Uploaded in a deliberately wrong order, so upload order proves nothing.
   const shuffled = [...files].reverse();
   await page.setInputFiles('input[type="file"]', shuffled);
-  await page.waitForFunction(() => document.querySelectorAll(".chip").length === 9);
-  pass("nine JPEGs with EXIF capture times uploaded, newest first");
+  await page.waitForFunction(
+    (n) => document.querySelectorAll(".chip").length === n,
+    files.length,
+  );
+  pass(`${files.length} JPEGs with EXIF capture times uploaded, newest first`);
 
   // ---- the plan, before anything is applied to the project
   const arranger = page.locator("section:has(h2:text('Arrange a trip'))");
   const planText = (await arranger.locator(".report").innerText()).replace(/\s+/g, " ");
-  if (/9 photos · 3 days/.test(planText)) pass(`plan reads the trip: ${planText}`);
-  else fail(`plan should say 9 photos over 3 days, said: ${planText}`);
+  if (/11 photos · 3 days/.test(planText)) pass(`plan reads the trip: ${planText}`);
+  else fail(`plan should say 11 photos over 3 days, said: ${planText}`);
+
+  if (/2 near-duplicates skipped across 1 burst/.test(planText)) {
+    pass("the burst is recognised: 2 of the 3 attempts set aside");
+  } else {
+    fail(`expected the burst to be reported, plan said: ${planText}`);
+  }
 
   const orderNote = (await arranger.innerText()).replace(/\s+/g, " ");
   if (/order they were taken/.test(orderNote)) {
@@ -184,6 +268,23 @@ const run = async () => {
   } else {
     fail("the panel names the wrong first photo");
   }
+
+  // ---- turning the burst skipping off puts every attempt back
+  const burstToggle = arranger.locator('label:has-text("One photo per burst") input');
+  await burstToggle.uncheck();
+  const allIn = await arranger.locator("button.primary").innerText();
+  const withDupes = Number(allIn.match(/(\d+)\s+spread/)?.[1] ?? 0);
+  if (withDupes < 1) fail(`the button should still promise spreads, said: ${allIn}`);
+  const plainText = (await arranger.locator(".report").innerText()).replace(/\s+/g, " ");
+  if (!/near-duplicate/.test(plainText)) {
+    pass("unticking it lays out all 11, duplicates and all");
+  } else {
+    fail(`with skipping off nothing should be skipped, plan said: ${plainText}`);
+  }
+  await burstToggle.check();
+  const backOn = (await arranger.locator(".report").innerText()).replace(/\s+/g, " ");
+  if (/2 near-duplicates skipped/.test(backOn)) pass("and ticking it back on skips them again");
+  else fail(`re-ticking should skip them again, plan said: ${backOn}`);
 
   const button = arranger.locator("button.primary");
   const label = await button.innerText();
@@ -218,16 +319,14 @@ const run = async () => {
     fail(`expected 9 filled slots across the spreads, got ${JSON.stringify(filled)}`);
   }
 
-  // ---- the photos are in the order they were taken, across the spreads
-  const palette = trip.map((p) => ({
-    id: p.id,
-    rgb: [
-      parseInt(p.colour.slice(1, 3), 16),
-      parseInt(p.colour.slice(3, 5), 16),
-      parseInt(p.colour.slice(5, 7), 16),
-    ],
-  }));
+  const chipsAfter = await page.locator(".chip").count();
+  if (chipsAfter === 11) {
+    pass("the skipped duplicates are still in the tray — nothing was deleted");
+  } else {
+    fail(`expected 11 photos still in the tray, found ${chipsAfter}`);
+  }
 
+  // ---- the photos are in the order they were taken, across the spreads
   const seen = [];
   for (let i = 0; i < promised; i++) {
     await page.locator(".strip-item").nth(i).click();
@@ -241,6 +340,11 @@ const run = async () => {
     pass(`photos read in capture order across the spreads: ${seen.join(" ")}`);
   } else {
     fail(`out of order.\n  expected ${expected.join(" ")}\n  got      ${seen.join(" ")}`);
+  }
+  if (seen.filter((id) => id === "d2b").length === 1) {
+    pass("the burst of three put exactly one photo on the page, in its place in the day");
+  } else {
+    fail(`the burst should contribute one photo, contributed ${seen.filter((id) => id === "d2b").length}`);
   }
 
   // ---- the day breaks

@@ -1,5 +1,6 @@
 import type { Placement, Slot, Template } from "../types";
 import { fillCrop } from "./geometry";
+import { dedupe, DEFAULT_DEDUPE } from "./dedupe";
 import { bandFor } from "./quality";
 import { MM_PER_INCH } from "./units";
 
@@ -30,6 +31,10 @@ export type TripPhoto = {
   /** Capture time where it is known. See `exif.ts`. */
   takenAt?: number;
   timeSource?: "exif" | "file";
+  /** Near-duplicate signature where it is known. See `dedupe.ts`. */
+  thumb?: string;
+  sharpness?: number;
+  contrast?: number;
 };
 
 export type ArrangeOptions = {
@@ -37,11 +42,14 @@ export type ArrangeOptions = {
   newSpreadEachDay: boolean;
   /** Never put more than this many photos on one spread. */
   maxPerSpread: number;
+  /** Lay out one of each burst instead of all five attempts. */
+  skipDuplicates: boolean;
 };
 
 export const DEFAULT_ARRANGE: ArrangeOptions = {
   newSpreadEachDay: true,
   maxPerSpread: 6,
+  skipDuplicates: true,
 };
 
 export type ArrangedSpread = {
@@ -62,6 +70,18 @@ export type ArrangeReport = {
   /** Placements whose resolution falls short at the size they landed on. */
   soft: { amber: number; red: number };
   days: number;
+  /**
+   * Near-duplicates left out: the second, third and fourth attempt at a shot.
+   * They stay in the tray — this is a decision about the page, not the photo.
+   */
+  skipped: TripPhoto[];
+  /** How many bursts had anything set aside, for the wording in the UI. */
+  bursts: number;
+  /**
+   * True when not one photo could be compared — all added before signatures
+   * existed, or all blank — so the UI can say why skipping did nothing.
+   */
+  cannotCompare: boolean;
 };
 
 // ---------------------------------------------------------------------------
@@ -365,7 +385,14 @@ export const arrangeTrip = (
         ? "capture time"
         : "file date";
 
-  const runs = options.newSpreadEachDay ? splitByDay(ordered) : [ordered];
+  // Near-duplicates go before anything else: a burst of five is one photo as
+  // far as the page is concerned, and it should not be the spread planner that
+  // finds out. The dropped ones are reported, never deleted.
+  const sifted = options.skipDuplicates
+    ? dedupe(ordered, DEFAULT_DEDUPE)
+    : { kept: ordered, dropped: [] as TripPhoto[], bursts: 0, unusable: false };
+
+  const runs = options.newSpreadEachDay ? splitByDay(sifted.kept) : [sifted.kept];
   const spreads: ArrangedSpread[] = [];
   const leftOver: TripPhoto[] = [];
   const soft = { amber: 0, red: 0 };
@@ -396,5 +423,14 @@ export const arrangeTrip = (
     }
   }
 
-  return { spreads, leftOver, ordering, soft, days: dayCount(ordered) };
+  return {
+    spreads,
+    leftOver,
+    ordering,
+    soft,
+    days: dayCount(ordered),
+    skipped: sifted.dropped,
+    bursts: sifted.bursts,
+    cannotCompare: options.skipDuplicates && sifted.unusable,
+  };
 };

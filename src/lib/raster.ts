@@ -1,5 +1,7 @@
 import type { Crop, Quarter, SlotShape } from "../types";
 import { mmToPx } from "./units";
+import { SIG_SIZE, signatureOf } from "./dedupe";
+import type { Signature } from "./dedupe";
 
 /**
  * Canvas rendering for a single cropped photo.
@@ -198,6 +200,34 @@ export const rasterizeItem = async (
   };
 };
 
+/**
+ * A photo boiled down to a small grayscale square, which is all the
+ * near-duplicate signature needs — see `dedupe.ts` for what is done with it.
+ *
+ * The browser's own downscale does the averaging, so this costs one draw of a
+ * 12 MP photo into a 64 px box rather than a pass over twelve million pixels.
+ */
+export const graySquare = (src: CanvasImageSource, w: number, h: number): Uint8Array => {
+  const c = document.createElement("canvas");
+  c.width = SIG_SIZE;
+  c.height = SIG_SIZE;
+  const ctx = c.getContext("2d", { willReadFrequently: true });
+  if (!ctx) return new Uint8Array(0);
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+  // Squashed to a square rather than cropped: the whole frame is what is being
+  // compared, and both photos are squashed the same way.
+  ctx.drawImage(src, 0, 0, w, h, 0, 0, SIG_SIZE, SIG_SIZE);
+
+  const px = ctx.getImageData(0, 0, SIG_SIZE, SIG_SIZE).data;
+  const gray = new Uint8Array(SIG_SIZE * SIG_SIZE);
+  for (let i = 0; i < gray.length; i++) {
+    // Rec. 601 luma, the same weighting the eye uses for brightness.
+    gray[i] = (px[i * 4] * 77 + px[i * 4 + 1] * 150 + px[i * 4 + 2] * 29) >> 8;
+  }
+  return gray;
+};
+
 /** Decode an asset blob once and keep it around for redraws. */
 export const loadSource = async (blob: Blob): Promise<Source> => {
   const bitmap = await createImageBitmap(blob);
@@ -211,4 +241,24 @@ export const readImageSize = async (
   const size = { w_px: bmp.width, h_px: bmp.height };
   bmp.close();
   return size;
+};
+
+/**
+ * Size and near-duplicate signature from one decode.
+ *
+ * Importing a trip decodes two hundred photos; doing it twice to answer two
+ * questions would be two hundred decodes wasted.
+ */
+export const readImageMeta = async (
+  blob: Blob,
+): Promise<{ w_px: number; h_px: number } & Partial<Signature>> => {
+  const bmp = await createImageBitmap(blob);
+  const size = { w_px: bmp.width, h_px: bmp.height };
+  try {
+    const gray = graySquare(bmp, bmp.width, bmp.height);
+    if (gray.length > 0) return { ...size, ...signatureOf(gray, SIG_SIZE, SIG_SIZE) };
+    return size;
+  } finally {
+    bmp.close();
+  }
 };
