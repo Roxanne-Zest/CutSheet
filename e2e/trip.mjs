@@ -280,6 +280,34 @@ const run = async () => {
   if (afterReload === promised) pass("the arranged spreads survive a reload");
   else fail(`after reload ${afterReload} spreads, expected ${promised}`);
 
+  // ---- clearing the photos empties the slots but keeps the spreads
+  await page.locator('.rail button:has-text("Clear photos")').click();
+  const warning = (await page.locator(".rail .confirm").innerText()).replace(/\s+/g, " ");
+  if (/9 of them are in a spread/.test(warning)) {
+    pass("clearing says how many placed photos it is about to take with it");
+  } else {
+    fail(`the clear warning should count the placed photos, said: ${warning}`);
+  }
+
+  await page.locator('.rail .confirm button:has-text("Remove all")').click();
+  await page.waitForFunction(() => document.querySelectorAll(".chip").length === 0);
+  const after = await page.evaluate(() => ({
+    spreads: document.querySelectorAll(".strip-item").length,
+    canvases: document.querySelectorAll(".strip-item .slot canvas").length,
+  }));
+  if (after.spreads === promised && after.canvases === 0) {
+    pass(`photos cleared, all ${after.spreads} spreads still standing with empty slots`);
+  } else {
+    fail(`after clearing: ${JSON.stringify(after)}, expected ${promised} spreads and no photos`);
+  }
+
+  await page.waitForTimeout(700); // the autosave debounce
+  await page.reload({ waitUntil: "networkidle" });
+  await page.waitForSelector(".strip-item");
+  const chipsBack = await page.locator(".chip").count();
+  if (chipsBack === 0) pass("the photos stay gone after a reload — they left IndexedDB too");
+  else fail(`${chipsBack} photos came back after reload`);
+
   if (errors.length) fail(`console errors: ${errors.join(" | ")}`);
   else pass("no console errors");
 
