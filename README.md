@@ -9,20 +9,45 @@ Four tools that share one promise:
 | **Reference card** | Finding out whether your printer scales at all. One page of shapes at known sizes. |
 | **Sheet sizer** | Artwork somebody else made. Measure one sticker, print the sheet at true size. |
 | **Cut path** | A sticker with a messy painted-on border. Throw that edge away and build a real vector cut path. |
-| **Journal** | Photos you laid out yourself. Pick a template, drop photos in, guillotine. |
+| **Journal** | Photos you laid out yourself. Pick a template, drop photos in, guillotine. Or drop a whole trip in and let it arrange the spreads. |
 
 ```
 Journal                       Sheet sizer
 Pick format + layout          Drop a sticker sheet in
         ↓                             ↓
 Drop photos into slots        Drag a line across one circle
+  (or: drop a trip in and            ↓
+   arrange the spreads)       Type "12 mm"
         ↓                             ↓
-Add more spreads              Type "12 mm"
+Add more spreads              PDF at true physical size
         ↓                             ↓
-Generate → A4 PDF             PDF at true physical size
-        ↓                             ↓
-Print at 100% → guillotine    Print at 100% → punch
+Generate → A4 PDF             Print at 100% → punch
+        ↓
+Print at 100% → guillotine
 ```
+
+### Arranging a trip
+
+Dropping two hundred holiday photos in and placing them by hand is two hundred
+drags before you have looked at a single page. **Arrange a trip** does the
+first pass:
+
+- **Order** comes from the capture time inside the file — the EXIF block a
+  camera writes — so two cameras on one trip interleave correctly, which file
+  names never do. No capture time, and it falls back to the file date, then to
+  the name, and says which it used.
+- **Spreads break where the days break**, unless you turn that off.
+- **The layout is chosen to suit the photos**, not the other way round: it
+  scores every layout in your format on how much of each photo the crop would
+  throw away and how soft it would print at that size, and works back from the
+  end of each day so a day of seven photos does not finish with two lonely
+  pages.
+- **Photos are never reordered to make a layout fit**, and never rotated —
+  chronology is the spine of a trip journal, and a sideways horizon is not a
+  fix.
+
+What comes out is ordinary spreads. Re-flow them, swap photos, re-crop, delete
+one. Undo puts the project back exactly as it was.
 
 The app owns the geometry, so nothing is inferred. Crop, size, rotation and
 required DPI are all values the app set. Every sheet it produces carries the
@@ -94,6 +119,7 @@ npm run dev &            # then, against a real browser:
 npm run e2e              # journal: drives the UI, generates a PDF, measures it
 npm run e2e:scale        # reference card + sheet sizer, same treatment
 npm run e2e:cutpath      # cut path builder, against a wobbly-bordered sticker
+npm run e2e:trip         # arranging a trip: real JPEGs with real EXIF, in the wrong order
 npm run e2e:render       # renders the PDF pages to e2e-out/*.png to look at
 ```
 

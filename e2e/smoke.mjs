@@ -172,7 +172,9 @@ const run = async () => {
   // The app's own report tells us how many sheets to expect, which is not
   // "pages minus one" — the layout plan can run to several pages itself.
   const expectedSheets = Number(
-    (await page.locator(".report").innerText()).match(/(\d+)\s+A4 sheet/)?.[1] ?? "0",
+    // The trip arranger has a report of its own in the left rail.
+    (await page.locator(".rail.right .report").innerText()).match(/(\d+)\s+A4 sheet/)?.[1] ??
+      "0",
   );
   if (expectedSheets > 0) pass(`app reports ${expectedSheets} A4 sheet(s)`);
   else fail("app reported no sheets to print");
