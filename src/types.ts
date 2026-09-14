@@ -85,6 +85,14 @@ export type Asset = {
   w_px: number;
   h_px: number;
   blob: Blob;
+  /**
+   * When the photo was taken, so a trip can be put back in the order it
+   * happened. Optional: photos added before this existed have no time, and a
+   * stripped EXIF block leaves the file date as the best guess — which is why
+   * `timeSource` says which one it is rather than letting the UI assume.
+   */
+  takenAt?: number;
+  timeSource?: "exif" | "file";
 };
 
 /**

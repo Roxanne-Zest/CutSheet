@@ -13,7 +13,8 @@
     "e2e": "node e2e/smoke.mjs",
     "e2e:render": "node e2e/render-pdf.mjs",
     "e2e:scale": "node e2e/scale.mjs",
-    "e2e:cutpath": "node e2e/cutpath.mjs"
+    "e2e:cutpath": "node e2e/cutpath.mjs",
+    "e2e:trip": "node e2e/trip.mjs"
   },
   "dependencies": {
     "clipper-lib": "^6.4.2",

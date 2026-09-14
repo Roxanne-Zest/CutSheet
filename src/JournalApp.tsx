@@ -27,6 +27,8 @@ import { buildPrintItems, resolveShape } from "./lib/printItems";
 import { dropCount, formatChangeDrops, remapTemplate } from "./lib/layoutChange";
 import { generatePdf, packProject } from "./lib/pdf";
 import { loadSource, readImageSize } from "./lib/raster";
+import { takenAtOf } from "./lib/exif";
+import type { ArrangeReport } from "./lib/autoLayout";
 import type { Source } from "./lib/raster";
 import * as db from "./lib/db";
 import { uid } from "./lib/id";
@@ -35,6 +37,7 @@ import { LayoutGallery } from "./components/LayoutGallery";
 import { SpreadView } from "./components/SpreadView";
 import { Inspector } from "./components/Inspector";
 import { SheetPreview } from "./components/SheetPreview";
+import { TripArranger } from "./components/TripArranger";
 
 type ImageSize = { w_px: number; h_px: number };
 
@@ -89,6 +92,8 @@ export function JournalApp() {
    */
   const [galleryMode, setGalleryMode] = useState<"add" | "change">("add");
   const [pending, setPending] = useState<PendingChange | null>(null);
+  /** The spreads as they were before the last arrange, for Undo. */
+  const [beforeArrange, setBeforeArrange] = useState<Spread[] | null>(null);
   const saveTimer = useRef<number | null>(null);
 
   // ---- load
@@ -215,6 +220,15 @@ export function JournalApp() {
     return out;
   }, [items, spread]);
 
+  /** Photos already sitting in a slot, so an arrange can leave them alone. */
+  const placedIds = useMemo(() => {
+    const out = new Set<string>();
+    for (const sp of project?.spreads ?? []) {
+      for (const pl of sp.placements) out.add(pl.assetId);
+    }
+    return out;
+  }, [project]);
+
   /** Biggest slot each photo has to fill anywhere, for the tray's dot. */
   const worstSlot = useMemo(() => {
     const out = new Map<string, { w: number; h: number }>();
@@ -255,6 +269,39 @@ export function JournalApp() {
     setProject((p) => (p ? { ...p, spreads: [...p.spreads, s] } : p));
     setSpreadId(s.id);
     setSlotId(null);
+  };
+
+  /**
+   * Turn an arranged plan into real spreads.
+   *
+   * They are ordinary spreads from here on — the arranger picks a layout and a
+   * crop-to-fill for each photo and then gets out of the way, so every one of
+   * them can be re-flowed, re-cropped or deleted exactly like a hand-built one.
+   */
+  const applyArrangement = (report: ArrangeReport, scope: "unplaced" | "all") => {
+    if (!project) return;
+    const made: Spread[] = report.spreads.map((s) => ({
+      id: uid("spr"),
+      templateId: s.templateId,
+      placements: s.placements,
+    }));
+    if (made.length === 0) return;
+
+    setBeforeArrange(project.spreads);
+    const spreads = scope === "all" ? made : [...project.spreads, ...made];
+    setProject({ ...project, spreads });
+    setSpreadId(made[0].id);
+    setSlotId(null);
+    setGalleryMode("add");
+    setPending(null);
+  };
+
+  const undoArrangement = () => {
+    if (!beforeArrange) return;
+    setProject((p) => (p ? { ...p, spreads: beforeArrange } : p));
+    setSpreadId(beforeArrange[0]?.id ?? null);
+    setSlotId(null);
+    setBeforeArrange(null);
   };
 
   /** Re-flow the current spread. Only reachable from change mode. */
@@ -395,13 +442,14 @@ export function JournalApp() {
     for (const file of Array.from(files)) {
       if (!file.type.startsWith("image/")) continue;
       try {
-        const size = await readImageSize(file);
+        const [size, when] = await Promise.all([readImageSize(file), takenAtOf(file)]);
         const asset: Asset = {
           id: uid("ast"),
           name: file.name,
           type: file.type,
           blob: file,
           ...size,
+          ...when,
         };
         await db.saveAsset(asset);
         added.push(asset);
@@ -414,6 +462,9 @@ export function JournalApp() {
 
   const removePhoto = async (id: string) => {
     await db.deleteAsset(id);
+    // Undoing back to a spread that still points at a deleted photo would put
+    // an empty slot on the page and call it the old arrangement.
+    setBeforeArrange(null);
     setAssets((a) => a.filter((x) => x.id !== id));
     setSources((s) => {
       const next = new Map(s);
@@ -495,6 +546,7 @@ export function JournalApp() {
               setProject(p);
               setSpreadId(null);
               setSlotId(null);
+              setBeforeArrange(null);
             }}
           >
             New project
@@ -605,6 +657,20 @@ export function JournalApp() {
             onAdd={(f) => void addPhotos(f)}
             onSelect={setAssetId}
             onRemove={(id) => void removePhoto(id)}
+          />
+        </section>
+
+        <section>
+          <h2>Arrange a trip</h2>
+          <TripArranger
+            assets={assets}
+            placedIds={placedIds}
+            templates={templates}
+            formatName={format.name}
+            existingSpreads={project.spreads.length}
+            onArrange={applyArrangement}
+            onUndo={undoArrangement}
+            canUndo={beforeArrange !== null}
           />
         </section>
       </aside>
