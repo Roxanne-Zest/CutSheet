@@ -484,6 +484,27 @@ export function JournalApp() {
     );
   };
 
+  /**
+   * Empty the tray.
+   *
+   * The photos only exist in this browser, so this is the one destructive
+   * thing in the app that nothing else can undo — hence the confirmation in
+   * the tray. Spreads and layouts survive; their slots simply empty, so the
+   * project you built is still there to drop a fresh set of photos into.
+   */
+  const clearPhotos = async () => {
+    await Promise.all(assets.map((a) => db.deleteAsset(a.id)));
+    setAssets([]);
+    setSources(new Map());
+    setAssetId(null);
+    setBeforeArrange(null);
+    setProject((p) =>
+      p
+        ? { ...p, spreads: p.spreads.map((s) => ({ ...s, placements: [] })) }
+        : p,
+    );
+  };
+
   const generate = async () => {
     if (!project) return;
     setError(null);
@@ -656,7 +677,9 @@ export function JournalApp() {
             worstSlotMm={worstSlot}
             onAdd={(f) => void addPhotos(f)}
             onSelect={setAssetId}
+            placedCount={placedIds.size}
             onRemove={(id) => void removePhoto(id)}
+            onClearAll={() => void clearPhotos()}
           />
         </section>
 

@@ -12,20 +12,26 @@ export function PhotoTray({
   assets,
   selectedId,
   worstSlotMm,
+  placedCount,
   onAdd,
   onSelect,
   onRemove,
+  onClearAll,
 }: {
   assets: Asset[];
   selectedId: string | null;
   /** Largest slot this asset fills anywhere in the project, in mm. */
   worstSlotMm: Map<string, { w: number; h: number }>;
+  /** How many of these are sitting in a slot, so clearing can say what it costs. */
+  placedCount: number;
   onAdd: (files: FileList) => void;
   onSelect: (id: string | null) => void;
   onRemove: (id: string) => void;
+  onClearAll: () => void;
 }) {
   const input = useRef<HTMLInputElement>(null);
   const [over, setOver] = useState(false);
+  const [confirmingClear, setConfirmingClear] = useState(false);
   const [urls, setUrls] = useState<Map<string, string>>(new Map());
 
   useEffect(() => {
@@ -125,10 +131,48 @@ export function PhotoTray({
       </div>
 
       {assets.length > 0 && (
-        <p className="hint">
-          Drag a photo onto a slot, or select one here and click a slot. The dot is
-          resolution at that photo&rsquo;s largest slot: green is 300 dpi or better.
-        </p>
+        <>
+          {confirmingClear ? (
+            <div className="confirm">
+              <b>Remove all {assets.length} photos?</b>
+              <p>
+                They go from this browser for good — there is no copy anywhere else.
+                {placedCount > 0 &&
+                  ` ${placedCount} of them ${
+                    placedCount === 1 ? "is" : "are"
+                  } in a spread, and those slots will empty.`}{" "}
+                Your spreads and layouts stay.
+              </p>
+              <div className="row">
+                <button
+                  className="grow danger"
+                  onClick={() => {
+                    setConfirmingClear(false);
+                    onClearAll();
+                  }}
+                >
+                  Remove all {assets.length}
+                </button>
+                <button className="grow" onClick={() => setConfirmingClear(false)}>
+                  Cancel
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button
+              className="ghost danger"
+              style={{ width: "100%", marginTop: 8 }}
+              onClick={() => setConfirmingClear(true)}
+            >
+              Clear photos
+            </button>
+          )}
+
+          <p className="hint">
+            Drag a photo onto a slot, or select one here and click a slot. The dot is
+            resolution at that photo&rsquo;s largest slot: green is 300 dpi or better.
+          </p>
+        </>
       )}
     </>
   );
