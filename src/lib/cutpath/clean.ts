@@ -149,10 +149,14 @@ export type CleanReport = {
 
 export const cleanMask = (
   m: Mask,
-  o: { smoothing: number; keepHoles: boolean },
+  o: { smoothing: number; keepHoles: boolean; target?: "sticker" | "artwork" },
 ): CleanReport => {
   const r = Math.max(0, o.smoothing);
-  const smoothed = r > 0 ? close(open(m, r), r) : m;
+  // Keeping a painted border: the flood stopped at a thin rim and the sticker
+  // inside it is the same colour as the paper. Fill the outline *before*
+  // opening, or the opening erases the rim and the sticker with it.
+  const base = o.target === "sticker" && !o.keepHoles ? fillHoles(m) : m;
+  const smoothed = r > 0 ? close(open(base, r), r) : base;
   const { mask: filtered, dropped } = dropSmallComponents(smoothed);
   const filled = o.keepHoles ? filtered : fillHoles(filtered);
   return { mask: filled, dropped, warnings: detectMerged(filled) };

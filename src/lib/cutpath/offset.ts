@@ -132,7 +132,10 @@ export const vectorOpen = (polys: Poly[], r_mm: number): Poly[] =>
  */
 export const makeCuttable = (polys: Poly[], bladeRadius_mm: number): Poly[] => {
   if (bladeRadius_mm <= 0) return polys;
-  return vectorOpen(vectorClose(polys, bladeRadius_mm), bladeRadius_mm);
+  // One shape at a time. Closing the whole set at once bridges any two shapes
+  // nearer than twice the radius, so neighbours that never touched came out
+  // welded into one path — the blade radius is about corners, not neighbours.
+  return polys.flatMap((p) => vectorOpen(vectorClose([p], bladeRadius_mm), bladeRadius_mm));
 };
 
 /** Drop holes, for when the donut is cut on its outline. */

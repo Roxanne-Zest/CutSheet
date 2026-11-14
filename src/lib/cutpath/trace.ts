@@ -68,6 +68,62 @@ export const traceMask = (m: Mask): Poly[] => {
   return polys.sort((a, b) => ringArea(b.outer) - ringArea(a.outer));
 };
 
+/** Three box passes: close enough to a Gaussian, and separable. */
+const blur = (src: Float64Array, w: number, h: number, r: number): Float64Array => {
+  let a = src;
+  const win = 2 * r + 1;
+  for (let pass = 0; pass < 3; pass++) {
+    const t = new Float64Array(a.length);
+    for (let y = 0; y < h; y++) {
+      let sum = 0;
+      for (let x = -r; x <= r; x++) sum += a[y * w + Math.min(w - 1, Math.max(0, x))];
+      for (let x = 0; x < w; x++) {
+        t[y * w + x] = sum / win;
+        sum += a[y * w + Math.min(w - 1, x + r + 1)] - a[y * w + Math.max(0, x - r)];
+      }
+    }
+    const b = new Float64Array(a.length);
+    for (let x = 0; x < w; x++) {
+      let sum = 0;
+      for (let y = -r; y <= r; y++) sum += t[Math.min(h - 1, Math.max(0, y)) * w + x];
+      for (let y = 0; y < h; y++) {
+        b[y * w + x] = sum / win;
+        sum += t[Math.min(h - 1, y + r + 1) * w + x] - t[Math.max(0, y - r) * w + x];
+      }
+    }
+    a = b;
+  }
+  return a;
+};
+
+/**
+ * Trace the mask as a smooth, sub-pixel outline.
+ *
+ * `traceMask` returns the pixel staircase, and everything downstream then has
+ * to guess which steps were shape and which were pixels. Blurring the mask into
+ * a soft field first lets marching squares interpolate the half-way line
+ * between pixels, so the staircase never exists and nothing has to remove it.
+ */
+export const traceSmooth = (m: Mask, radius = 1): Poly[] => {
+  const values = new Float64Array(m.data.length);
+  for (let i = 0; i < values.length; i++) values[i] = m.data[i];
+  const field = radius > 0 ? blur(values, m.w, m.h, radius) : values;
+  const multi = contours().size([m.w, m.h]).thresholds([0.5])(field as unknown as number[])[0];
+  if (!multi) return [];
+  const polys: Poly[] = [];
+  for (const rings of multi.coordinates) {
+    if (rings.length === 0) continue;
+    const outer = orient(toRing(rings[0] as number[][]), true);
+    if (outer.length < 3) continue;
+    const holes = rings
+      .slice(1)
+      .map((r) => orient(toRing(r as number[][]), false))
+      .filter((r) => r.length >= 3);
+    polys.push({ outer, holes });
+  }
+  return polys.sort((a, b) => ringArea(b.outer) - ringArea(a.outer));
+};
+
 export const countNodes = (polys: Poly[]): number =>
   polys.reduce((n, p) => n + p.outer.length + p.holes.reduce((k, h) => k + h.length, 0), 0);
 
