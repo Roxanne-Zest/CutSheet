@@ -41,8 +41,16 @@ export type MaskRoute = "paper" | "ink";
  */
 export type CutTarget = "sticker" | "artwork";
 
+/** `auto` looks at the image and picks one of the two; see `chooseTarget`. */
+export type TargetSetting = CutTarget | "auto";
+
 export type CutPathSettings = {
-  target: CutTarget;
+  target: TargetSetting;
+  /**
+   * Rebuild only: match the border that was painted, instead of `border_mm`.
+   * Measured from the image, so it stays right when the width changes.
+   */
+  borderAuto?: boolean;
   route: MaskRoute;
   /** How far from the corner colour still counts as background. 0..1. */
   backgroundTolerance: number;
@@ -99,6 +107,11 @@ export const KEEP_BORDER: Pick<CutPathSettings, "target" | "border_mm" | "bladeR
 
 export type CutPathStats = {
   stickers: number;
+  /** What the cut followed — the answer `auto` came to, or the one that was set. */
+  target: CutTarget;
+  /** The border and background tolerance actually used, so the sliders can show them. */
+  border_mm: number;
+  backgroundTolerance: number;
   /** Which route the mask took, so the UI can grey out the control that is idle. */
   source: "alpha" | "background" | "ink";
   nodes: number;

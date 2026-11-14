@@ -4,8 +4,9 @@ import type { CutPathSettings, Mask, Poly } from "../lib/cutpath/types";
 import { rasterisePolys, compositeArtwork } from "../lib/cutpath/composite";
 import type { Rgb } from "../lib/cutpath/composite";
 import { boundsOf } from "../lib/cutpath/trace";
+import { offsetPolys } from "../lib/cutpath/offset";
 import { toCricutSvg, toPdf, toSvg } from "../lib/cutpath/exportPath";
-import { hasUsefulAlpha, suggestStickerTolerance } from "../lib/cutpath/mask";
+import { suggestStickerTolerance } from "../lib/cutpath/mask";
 import { MM_PER_INCH } from "../lib/units";
 import type { CutPathRequest, CutPathResponse } from "../workers/cutpath.worker";
 
@@ -149,6 +150,8 @@ export function CutPathPanel() {
   const requestId = useRef(0);
   const timer = useRef<number | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
+  /** Has the user typed a width for this image, or is it still the default? */
+  const widthTouched = useRef(false);
   const sourceRef = useRef<HTMLCanvasElement | null>(null);
   const resultRef = useRef<HTMLCanvasElement | null>(null);
 
@@ -207,23 +210,28 @@ export function CutPathPanel() {
     setError(null);
     try {
       const img = await readImage(file);
-      // Start by keeping the border the sticker already has. On a file with
-      // transparency that is the alpha edge; on an opaque one the flood has to
-      // stop at the painted rim, so its tolerance is set from the paper's own
-      // noise rather than left at a default that floods through it.
-      setS((prev) => ({
-        ...prev,
-        ...KEEP_BORDER,
-        ...(hasUsefulAlpha(img.work)
-          ? {}
-          : { backgroundTolerance: suggestStickerTolerance(img.work) }),
-      }));
+      // Start on Auto: the pipeline looks at the image and decides whether
+      // the painted border can be kept or has to be rebuilt.
+      widthTouched.current = false;
+      setS((prev) => ({ ...prev, target: "auto", width_mm: DEFAULT_CUTPATH.width_mm }));
       setLoaded(img);
       setResult(null);
     } catch (e) {
       setError(e instanceof Error ? `Could not open ${file.name}: ${e.message}` : "Could not open that file.");
     }
   };
+
+  // A sheet of several stickers is not 48 mm wide. Until a width is typed, a
+  // sheet is sized to fill what Cricut will Print Then Cut on A4 — 183 mm by
+  // 270 mm, either way up — so the first preview is already at a usable scale.
+  useEffect(() => {
+    if (!loaded || !result || widthTouched.current) return;
+    if (result.stats.stickers < 2 || s.width_mm !== DEFAULT_CUTPATH.width_mm) return;
+    const aspect = loaded.work.w / loaded.work.h;
+    const width = aspect >= 1 ? Math.min(265, 180 * aspect) : Math.min(180, 265 * aspect);
+    widthTouched.current = true;
+    setS((prev) => ({ ...prev, width_mm: Math.round(width) }));
+  }, [loaded, result, s.width_mm]);
 
   const maskOf = useCallback(
     (bits: ArrayBuffer, w: number, h: number): Mask => ({
@@ -275,12 +283,28 @@ export function CutPathPanel() {
       const pxPerMm = s.width_mm > 0 ? src.w / s.width_mm : 1;
       const artMask = rasterisePolys(artwork, src.w, src.h, pxPerMm);
       const cutMask = rasterisePolys(polys, src.w, src.h, pxPerMm);
+      // Only the border ring is repainted. Anything deeper inside the cut than
+      // the border is the sticker's own interior and keeps its pixels, even
+      // where the artwork mask missed it — a white horse on a white border.
+      const border = result?.stats.target === "artwork" ? result.stats.border_mm : 0;
+      if (border > 0) {
+        const inner = rasterisePolys(offsetPolys(polys, -border * 1.15), src.w, src.h, pxPerMm);
+        for (let i = 0; i < artMask.data.length; i++) {
+          if (!inner.data[i] || artMask.data[i]) continue;
+          // Except what is the colour of a shadow: a painted rim caught inside
+          // the new border is exactly what is being thrown away.
+          const o = i * 4;
+          const lo = Math.min(src.data[o], src.data[o + 1], src.data[o + 2]);
+          const hi = Math.max(src.data[o], src.data[o + 1], src.data[o + 2]);
+          if (!(lo > 170 && hi - lo < 28)) artMask.data[i] = 1;
+        }
+      }
       const pixels = compositeArtwork(src.data, artMask, cutMask, rgb);
       const out = new ImageData(src.w, src.h);
       out.data.set(pixels);
       return out;
     },
-    [s.width_mm, rgb],
+    [s.width_mm, rgb, result],
   );
 
   useEffect(() => {
@@ -458,6 +482,21 @@ export function CutPathPanel() {
   // transparency is thresholded on alpha, everything else is flood filled. The
   // idle one is greyed out rather than left to look broken.
   const usingAlpha = result?.stats.source === "alpha";
+  /** What the cut is following: the setting, or what Auto made of it. */
+  const target = s.target === "auto" ? (result?.stats.target ?? "sticker") : s.target;
+  /** The numbers Auto arrived at, so touching a slider starts from them. */
+  const pinned = (): Partial<CutPathSettings> =>
+    s.target === "auto" && result
+      ? {
+          target: result.stats.target,
+          border_mm: result.stats.border_mm,
+          backgroundTolerance: result.stats.backgroundTolerance,
+          borderAuto: false,
+        }
+      : {};
+  const shownBorder = s.target === "auto" && result ? result.stats.border_mm : s.border_mm;
+  const shownTolerance =
+    s.target === "auto" && result ? result.stats.backgroundTolerance : s.backgroundTolerance;
 
   return (
     <>
@@ -518,7 +557,7 @@ export function CutPathPanel() {
                   // because neither number means anything alone, and together
                   // they are the whole of why a sheet welds into one path.
                   Number.isFinite(result.stats.gap_mm)
-                    ? ` · ${result.stats.gap_mm.toFixed(1)} mm apart, ${result.stats.clearance_mm.toFixed(1)} mm needed`
+                    ? ` · cuts ${result.stats.gap_mm.toFixed(1)} mm apart`
                     : ""
                 }${busy ? " · working…" : ` · ${result.ms} ms`}`
               : "Tracing…"}
@@ -570,6 +609,7 @@ export function CutPathPanel() {
                   onChange={(e) => {
                     const text = e.target.value;
                     setWidthDraft(text);
+                    widthTouched.current = true;
                     // Half-typed values are left on screen but not acted on.
                     // Anything positive commits immediately, so the preview
                     // still tracks the number as it is typed.
@@ -596,12 +636,23 @@ export function CutPathPanel() {
                 </span>
                 <div className="seg">
                   <button
+                    className={s.target === "auto" ? "active" : ""}
+                    onClick={() => patch({ target: "auto" })}
+                  >
+                    Auto
+                  </button>
+                  <button
                     className={s.target === "sticker" ? "active" : ""}
                     onClick={() =>
                       patch({
                         ...KEEP_BORDER,
                         ...(loaded && !usingAlpha
-                          ? { backgroundTolerance: suggestStickerTolerance(loaded.work) }
+                          ? {
+                              backgroundTolerance: Math.min(
+                                0.03,
+                                suggestStickerTolerance(loaded.work),
+                              ),
+                            }
                           : {}),
                       })
                     }
@@ -613,9 +664,16 @@ export function CutPathPanel() {
                     onClick={() =>
                       patch({
                         target: "artwork",
-                        border_mm: DEFAULT_CUTPATH.border_mm,
-                        bladeRadius_mm: DEFAULT_CUTPATH.bladeRadius_mm,
-                        backgroundTolerance: DEFAULT_CUTPATH.backgroundTolerance,
+                        // Carry on from the border Auto measured, if it did.
+                        border_mm:
+                          result?.stats.target === "artwork"
+                            ? result.stats.border_mm
+                            : DEFAULT_CUTPATH.border_mm,
+                        bladeRadius_mm: KEEP_BORDER.bladeRadius_mm,
+                        backgroundTolerance:
+                          result?.stats.target === "artwork"
+                            ? result.stats.backgroundTolerance
+                            : 0.1,
                       })
                     }
                   >
@@ -623,12 +681,16 @@ export function CutPathPanel() {
                   </button>
                 </div>
                 <p className="hint">
-                  {s.target === "sticker"
-                    ? "Cuts on the outer edge of the border the sticker already has. Magenta should cover each whole sticker, border included."
-                    : "Throws the painted border away, finds the artwork inside it and builds a new even border round that."}
+                  {s.target === "auto" && result
+                    ? target === "sticker"
+                      ? "Auto is keeping the border each sticker already has: its edge is clean enough to follow."
+                      : `Auto is rebuilding the border at ${result.stats.border_mm} mm, measured from the painted one: the painted edges run into each other and cannot be followed.`
+                    : target === "sticker"
+                      ? "Cuts on the outer edge of the border the sticker already has. Magenta should cover each whole sticker, border included."
+                      : "Throws the painted border away, finds the artwork inside it and builds a new even border round that."}
                 </p>
               </div>
-              {!usingAlpha && s.target === "artwork" && (
+              {!usingAlpha && target === "artwork" && (
                 <div className="field">
                   <span>
                     <span>How to find the artwork</span>
@@ -657,24 +719,24 @@ export function CutPathPanel() {
                 </div>
               )}
 
-              {!usingAlpha && (s.route === "paper" || s.target === "sticker") && (
+              {!usingAlpha && (s.route === "paper" || target === "sticker") && (
                 <Slider
                   label="Background tolerance"
-                  value={Math.round(s.backgroundTolerance * 200) / 2}
+                  value={Math.round(shownTolerance * 200) / 2}
                   min={0}
                   max={60}
                   step={0.5}
                   unit="%"
-                  onChange={(v) => patch({ backgroundTolerance: v / 100 })}
+                  onChange={(v) => patch({ ...pinned(), backgroundTolerance: v / 100 })}
                   hint={
-                    s.target === "sticker"
+                    target === "sticker"
                       ? "Set from the paper's own noise. Lower it if the border is not magenta; raise it if shadows or specks are."
                       : "Raise it until the painted-on border stops being magenta. That is the control that strips it."
                   }
                 />
               )}
 
-              {!usingAlpha && s.target === "artwork" && s.route === "ink" && (
+              {!usingAlpha && target === "artwork" && s.route === "ink" && (
                 <>
                   <Slider
                     label="Ink threshold"
@@ -746,18 +808,18 @@ export function CutPathPanel() {
               <h2>Cut</h2>
               <Slider
                 label="Border"
-                value={s.border_mm}
+                value={shownBorder}
                 min={-1}
                 max={5}
                 step={0.1}
                 unit=" mm"
-                onChange={(v) => patch({ border_mm: v })}
+                onChange={(v) => patch({ ...pinned(), border_mm: v })}
                 hint="+2 mm is the classic white sticker border. 0 cuts on the artwork edge."
               />
               <button
                 className="ghost"
                 style={{ width: "100%" }}
-                onClick={() => patch({ border_mm: PHOTO_BORDER_MM })}
+                onClick={() => patch({ ...pinned(), border_mm: PHOTO_BORDER_MM })}
               >
                 Use {PHOTO_BORDER_MM} mm for a photo
               </button>
