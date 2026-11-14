@@ -1,4 +1,4 @@
-import type { Mask, MaskRoute } from "./types";
+import type { CutTarget, Mask, MaskRoute } from "./types";
 import { newMask } from "./types";
 import { DEFAULT_INK, amputationRatio, inkMask } from "./ink";
 
@@ -21,7 +21,33 @@ export type Rgba = { data: Uint8ClampedArray; w: number; h: number };
  * sticker edge are ringing, and ringing is exactly what a median kills without
  * moving the edge itself.
  */
+/**
+ * A cheap identity for an image: its size and a few thousand sampled bytes.
+ * Enough to tell "the same picture again" from "a different one", which is all
+ * the caches keyed on it need — every slider move re-sends identical pixels.
+ */
+export const fingerprint = (img: Rgba): string => {
+  let hash = 2166136261;
+  const step = Math.max(4, Math.floor(img.data.length / 4096) | 3) + 1;
+  for (let i = 0; i < img.data.length; i += step) {
+    hash = Math.imul(hash ^ img.data[i], 16777619);
+  }
+  return `${img.w}x${img.h}:${hash >>> 0}`;
+};
+
+let lastMedian: { key: string; out: Rgba } | null = null;
+
 export const medianFilter3 = (img: Rgba): Rgba => {
+  // The filter is the slowest single step and its input never changes while
+  // someone drags a slider, so the last answer is kept.
+  const key = fingerprint(img);
+  if (lastMedian?.key === key) return lastMedian.out;
+  const out = medianFilter3Raw(img);
+  lastMedian = { key, out };
+  return out;
+};
+
+const medianFilter3Raw = (img: Rgba): Rgba => {
   const { w, h, data } = img;
   const out = new Uint8ClampedArray(data.length);
   const window = new Uint8Array(9);
@@ -47,6 +73,33 @@ export const medianFilter3 = (img: Rgba): Rgba => {
     }
   }
   return { data: out, w, h };
+};
+
+/**
+ * Is the alpha channel a clean cut-out — a real share of the image fully clear?
+ *
+ * Plenty of files carry alpha that is not a cut-out at all: a background
+ * remover that left a 10 to 25% haze everywhere, a soft vignette. Thresholding
+ * that finds one sticker the size of the page. Those are better flattened onto
+ * white and read by colour, like any opaque image.
+ */
+export const hasCleanAlpha = (img: Rgba): boolean => {
+  let clear = 0;
+  for (let i = 3; i < img.data.length; i += 4) if (img.data[i] < 16) clear += 1;
+  return clear / (img.data.length / 4) >= 0.03;
+};
+
+/** Composite onto white, so a hazy alpha channel reads as an opaque image. */
+export const flattenOnWhite = (img: Rgba): Rgba => {
+  const out = new Uint8ClampedArray(img.data.length);
+  for (let i = 0; i < out.length; i += 4) {
+    const a = img.data[i + 3] / 255;
+    out[i] = img.data[i] * a + 255 * (1 - a);
+    out[i + 1] = img.data[i + 1] * a + 255 * (1 - a);
+    out[i + 2] = img.data[i + 2] * a + 255 * (1 - a);
+    out[i + 3] = 255;
+  }
+  return { data: out, w: img.w, h: img.h };
 };
 
 /** Does this image carry alpha worth thresholding, or is it fully opaque? */
@@ -137,6 +190,63 @@ export const maskFromBackground = (img: Rgba, tolerance: number): Mask => {
   return out;
 };
 
+/**
+ * A tolerance for keeping a painted border: just above the paper's own noise.
+ *
+ * The outer edge of a painted sticker border is often the faintest line in the
+ * image — a rim a few levels darker than paper that is itself nearly white. A
+ * tolerance wide enough to be comfortable floods straight through it. So this
+ * measures how much the paper varies along the image edge and sits just above
+ * that, which is the widest setting that still stops at the rim.
+ */
+export const suggestStickerTolerance = (img: Rgba): number => {
+  const { w, h, data } = img;
+  const [r, g, b] = cornerColour(img);
+  const d: number[] = [];
+  const sample = (x: number, y: number) => d.push(rgbDistance(data, (y * w + x) * 4, r, g, b));
+  for (let x = 0; x < w; x += 2) {
+    sample(x, 0);
+    sample(x, h - 1);
+  }
+  for (let y = 0; y < h; y += 2) {
+    sample(0, y);
+    sample(w - 1, y);
+  }
+  d.sort((p, q) => p - q);
+  const noise = d[Math.floor((d.length - 1) * 0.95)] ?? 0;
+  const t = (noise * 2 + 3) / MAX_RGB_DIST;
+  return Math.round(Math.min(0.08, Math.max(0.015, t)) * 200) / 200;
+};
+
+const ARTWORK_LADDER = [0.03, 0.05, 0.07, 0.09, 0.12, 0.15, 0.19, 0.24];
+
+/**
+ * A tolerance for throwing a painted border away: just past its rim.
+ *
+ * Widening the flood, the area left behind falls in one step at the moment the
+ * rim gives way and the white border floods out with the paper. Before that
+ * step the border is still attached; long after it, pale artwork starts to go
+ * too. So the answer is the first rung past the biggest step, plus a little.
+ */
+export const suggestArtworkTolerance = (img: Rgba): number => {
+  const cover = ARTWORK_LADDER.map((t) => {
+    const m = maskFromBackground(img, t);
+    let n = 0;
+    for (let i = 0; i < m.data.length; i++) n += m.data[i];
+    return n / m.data.length;
+  });
+  let at = -1;
+  let biggest = 0.08;
+  for (let i = 1; i < cover.length; i++) {
+    const drop = cover[i - 1] > 0 ? (cover[i - 1] - cover[i]) / cover[i - 1] : 0;
+    if (drop > biggest) {
+      biggest = drop;
+      at = i;
+    }
+  }
+  return at < 0 ? 0.1 : Math.min(0.3, ARTWORK_LADDER[at] + 0.02);
+};
+
 export type MaskReport = {
   mask: Mask;
   /** Which route was taken, so the UI can show the control that matters. */
@@ -157,6 +267,7 @@ const AMPUTATION_LIMIT = 0.04;
 export const buildMask = (
   img: Rgba,
   o: {
+    target?: CutTarget;
     route?: MaskRoute;
     edgeThreshold: number;
     backgroundTolerance: number;
@@ -164,12 +275,15 @@ export const buildMask = (
     edgeSensitivity?: number;
   },
 ): MaskReport => {
-  const filtered = medianFilter3(img);
   const warnings: string[] = [];
+  // Alpha is only believed when it is a clean cut-out. Anything else is
+  // flattened and read by colour.
+  const useAlpha = hasUsefulAlpha(img) && hasCleanAlpha(img);
+  if (!useAlpha && hasUsefulAlpha(img)) img = flattenOnWhite(img);
+  const filtered = medianFilter3(img);
 
-  const useAlpha = hasUsefulAlpha(filtered);
   const route: MaskReport["source"] =
-    useAlpha ? "alpha" : o.route === "ink" ? "ink" : "background";
+    useAlpha ? "alpha" : o.target !== "sticker" && o.route === "ink" ? "ink" : "background";
 
   const mask =
     route === "alpha"
@@ -209,7 +323,9 @@ export const buildMask = (
   // The failure that has no other symptom: on a sheet whose artwork shares a
   // tone with its paper, a workable-looking tolerance quietly amputates the pale
   // parts of every sticker and the count never changes. Measure it directly.
-  if (route === "background" && coverage > 0.01 && coverage < 0.985) {
+  // Not when the border is being kept: there the flood is meant to stop at the
+  // sticker's edge, and the pale interior is recovered by filling the outline.
+  if (route === "background" && o.target !== "sticker" && coverage > 0.01 && coverage < 0.985) {
     const tight = maskFromBackground(filtered, Math.min(TIGHT_TOLERANCE, o.backgroundTolerance));
     const lost = amputationRatio(mask, tight);
     if (lost > AMPUTATION_LIMIT) {

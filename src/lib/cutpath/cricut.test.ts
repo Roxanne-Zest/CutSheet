@@ -9,7 +9,7 @@ import {
   CRICUT_INSET_MAX_MM,
   cricutInset,
   cricutPrintPolys,
-  toCricutCutSvg,
+  toCricutSvg,
 } from "./exportPath";
 
 const settings = (o: Partial<CutPathSettings> = {}): CutPathSettings => ({
@@ -87,12 +87,27 @@ describe("the Cricut print outline", () => {
   });
 
   it("shares the cut line's centre, so Align → Centre lines the two up", () => {
+    // Half a pixel at 300 dpi. The path is flattened from curves, so the
+    // offset's extreme points land a few hundredths of a millimetre either way;
+    // anything under a pixel is invisible in print and far finer than a blade.
+    const HALF_PIXEL_MM = 25.4 / 300 / 2;
     const cut = boundsOf(r.polys);
     const img = boundsOf(print);
-    expect(Math.abs(cut.x + cut.w / 2 - (img.x + img.w / 2))).toBeLessThan(0.02);
-    expect(Math.abs(cut.y + cut.h / 2 - (img.y + img.h / 2))).toBeLessThan(0.02);
-    expect(Math.abs(cut.w - img.w - 2 * inset)).toBeLessThan(0.02);
-    expect(Math.abs(cut.h - img.h - 2 * inset)).toBeLessThan(0.02);
+    expect(Math.abs(cut.x + cut.w / 2 - (img.x + img.w / 2))).toBeLessThan(HALF_PIXEL_MM);
+    expect(Math.abs(cut.y + cut.h / 2 - (img.y + img.h / 2))).toBeLessThan(HALF_PIXEL_MM);
+  });
+
+  it("is smaller than the cut line by at least the inset each side, and by no more than a pixel extra", () => {
+    // Shrinking a flattened outline pulls each convex corner in by slightly
+    // more than the inset, so the image only ever sits a hair further inside —
+    // the safe direction. The panel shows the measured size, not 2 x inset.
+    const PIXEL_MM = 25.4 / 300;
+    const cut = boundsOf(r.polys);
+    const img = boundsOf(print);
+    for (const shrink of [cut.w - img.w, cut.h - img.h]) {
+      expect(shrink).toBeGreaterThanOrEqual(2 * inset - 0.001);
+      expect(shrink).toBeLessThan(2 * inset + PIXEL_MM);
+    }
   });
 
   it("keeps every sticker on a sheet", () => {
@@ -106,21 +121,33 @@ describe("the Cricut print outline", () => {
   });
 });
 
-describe("toCricutCutSvg", () => {
+describe("toCricutSvg as the cut line of the pair", () => {
   const r = runCutPath(star(), settings({ width_mm: 50, border_mm: 2 }));
   const b = boundsOf(r.polys);
-  const svg = toCricutCutSvg({ polys: r.polys, w_mm: b.w, h_mm: b.h, name: "star", fill: "#ffffff" });
-
-  it("is sized in millimetres", () => {
-    expect(svg).toMatch(/width="[\d.]+mm" height="[\d.]+mm"/);
-    expect(svg).toContain(`viewBox="0 0 ${Math.round(b.w * 1e4) / 1e4} ${Math.round(b.h * 1e4) / 1e4}"`);
+  const svg = toCricutSvg({
+    polys: [],
+    curves: r.curves,
+    w_mm: b.w,
+    h_mm: b.h,
+    name: "star",
+    fill: "#ffffff",
   });
 
-  it("is a filled shape — no stroke, no embedded image for Design Space to drop", () => {
+  it("is sized in Design Space's 72 units to the inch, so it lands at true size", () => {
+    const w = Number(/width="([\d.]+)"/.exec(svg)?.[1]);
+    expect(Math.abs(w - (b.w * 72) / 25.4)).toBeLessThan(0.01);
+  });
+
+  it("is a shape in the border colour — no stroke, no embedded image for Design Space to drop", () => {
     expect(svg).toContain('fill="#ffffff"');
+    expect(svg).not.toContain('fill="#000000"');
     expect(svg).toContain('stroke="none"');
     expect(svg).not.toContain("<image");
-    expect(svg.match(/<path /g)?.length).toBe(1);
-    expect(svg).toMatch(/<path d="M /);
+    expect(svg).toMatch(/<path id="cut-1" d="M /);
+  });
+
+  it("stays black when no fill is asked for, for the cut-only export", () => {
+    const plain = toCricutSvg({ polys: [], curves: r.curves, w_mm: b.w, h_mm: b.h, name: "star" });
+    expect(plain).toContain('fill="#000000"');
   });
 });

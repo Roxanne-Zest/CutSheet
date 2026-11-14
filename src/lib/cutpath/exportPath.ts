@@ -4,6 +4,8 @@ import { A4, mmToPt, round } from "../units";
 import { INK, MUTED, PRINT_AT_100, RULER_CHECK, drawRuler100, makeDraw } from "../pdfDraw";
 import { boundsOf } from "./trace";
 import { offsetPolys } from "./offset";
+import type { CurvePoly } from "./curves";
+import { curveRingPath, curvesPath } from "./curves";
 
 /**
  * P7 — getting the path out.
@@ -37,6 +39,8 @@ export const polysPath = (polys: Poly[]): string =>
 export type ExportInput = {
   /** The cut path, in millimetres, top-left at the origin. */
   polys: Poly[];
+  /** The same path as curves. Written in preference to `polys` when present. */
+  curves?: CurvePoly[];
   /** The finished artwork as a data URI, already composited with its border. */
   artworkDataUri?: string;
   /** Size of the artwork in millimetres. */
@@ -66,8 +70,37 @@ export const toSvg = (o: ExportInput): string => {
   </g>
   <g id="cut" data-cut-path="true"
      fill="none" stroke="#ff0000" stroke-width="0.1" fill-rule="evenodd">
-    <path d="${polysPath(o.polys)}" />
+    <path d="${o.curves?.length ? curvesPath(o.curves) : polysPath(o.polys)}" />
   </g>
+</svg>
+`;
+};
+
+/** Design Space reads SVG user units at 72 to the inch and ignores the rest. */
+const CRICUT_UNITS_PER_MM = 72 / 25.4;
+
+/**
+ * SVG for Cricut Design Space — the cut line and nothing else.
+ *
+ * Design Space does not take an SVG with a picture in it, and it sizes an SVG
+ * from its raw coordinates at 72 units to the inch whatever the width and
+ * height attributes say. So this file is one filled path per sticker, in those
+ * units, and it lands on the canvas at true size as a ready-made cut layer.
+ */
+export const toCricutSvg = (o: ExportInput & { fill?: string }): string => {
+  const k = CRICUT_UNITS_PER_MM;
+  const w = round(o.w_mm * k, 3);
+  const h = round(o.h_mm * k, 3);
+  const paths = (o.curves ?? [])
+    .map((p, i) => {
+      const d = [p.outer, ...p.holes].map((r) => curveRingPath(r, k)).join(" ");
+      return `  <path id="cut-${i + 1}" d="${d}" fill="${o.fill ?? "#000000"}" fill-rule="evenodd" stroke="none" />`;
+    })
+    .join("\n");
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">
+  <title>${o.name} — cut lines, ${round(o.w_mm, 1)} x ${round(o.h_mm, 1)} mm</title>
+${paths}
 </svg>
 `;
 };
@@ -207,6 +240,9 @@ export const pathBounds = boundsOf;
  * outer outline is the shape and nothing else. The band between the two is
  * printed by the shape itself, in the border colour, so nothing shows.
  *
+ * The shape is `toCricutSvg` filled in the border colour rather than black, so
+ * the band it prints is indistinguishable from the border around it.
+ *
  * Half the border, capped, so the image keeps most of its border and the margin
  * stays well clear of the artwork. No border, no inset: there is no band of
  * border colour to hide it in, and a sliver would show at the edge.
@@ -219,33 +255,3 @@ export const cricutInset = (border_mm: number): number =>
 /** The print image's outline: the cut path pulled in by the inset. */
 export const cricutPrintPolys = (polys: Poly[], inset_mm: number): Poly[] =>
   inset_mm > 0 ? offsetPolys(polys, -inset_mm) : polys;
-
-export type CricutCutSvgInput = {
-  /** The cut path, in millimetres, top-left at the origin. */
-  polys: Poly[];
-  w_mm: number;
-  h_mm: number;
-  name: string;
-  /** Fill for the shape — the border colour, since it prints in the inset band. */
-  fill: string;
-};
-
-/**
- * The cut line as a filled shape and nothing else.
- *
- * Filled rather than stroked, because Design Space turns a stroked path into a
- * thin outline and cuts both sides of it. No embedded image either: Design
- * Space drops raster images from an SVG, which is why the artwork travels as
- * the separate PNG.
- */
-export const toCricutCutSvg = (o: CricutCutSvgInput): string => {
-  const w = round(o.w_mm, 4);
-  const h = round(o.h_mm, 4);
-  return `<?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg"
-     width="${w}mm" height="${h}mm" viewBox="0 0 ${w} ${h}">
-  <title>${o.name} — Cut Sheet cut line for Cricut</title>
-  <path d="${polysPath(o.polys)}" fill="${o.fill}" fill-rule="evenodd" stroke="none" />
-</svg>
-`;
-};

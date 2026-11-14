@@ -1,16 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { DEFAULT_CUTPATH, PHOTO_BORDER_MM } from "../lib/cutpath/types";
+import { DEFAULT_CUTPATH, KEEP_BORDER, PHOTO_BORDER_MM } from "../lib/cutpath/types";
 import type { CutPathSettings, Mask, Poly } from "../lib/cutpath/types";
 import { rasterisePolys, compositeArtwork } from "../lib/cutpath/composite";
 import type { Rgb } from "../lib/cutpath/composite";
 import { boundsOf } from "../lib/cutpath/trace";
+import { offsetPolys } from "../lib/cutpath/offset";
 import {
   cricutInset,
   cricutPrintPolys,
-  toCricutCutSvg,
+  toCricutSvg,
   toPdf,
   toSvg,
 } from "../lib/cutpath/exportPath";
+import { suggestStickerTolerance } from "../lib/cutpath/mask";
 import { MM_PER_INCH } from "../lib/units";
 import type { CutPathRequest, CutPathResponse } from "../workers/cutpath.worker";
 
@@ -161,6 +163,8 @@ export function CutPathPanel() {
   const requestId = useRef(0);
   const timer = useRef<number | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
+  /** Has the user typed a width for this image, or is it still the default? */
+  const widthTouched = useRef(false);
   const sourceRef = useRef<HTMLCanvasElement | null>(null);
   const resultRef = useRef<HTMLCanvasElement | null>(null);
 
@@ -219,12 +223,28 @@ export function CutPathPanel() {
     setError(null);
     try {
       const img = await readImage(file);
+      // Start on Auto: the pipeline looks at the image and decides whether
+      // the painted border can be kept or has to be rebuilt.
+      widthTouched.current = false;
+      setS((prev) => ({ ...prev, target: "auto", width_mm: DEFAULT_CUTPATH.width_mm }));
       setLoaded(img);
       setResult(null);
     } catch (e) {
       setError(e instanceof Error ? `Could not open ${file.name}: ${e.message}` : "Could not open that file.");
     }
   };
+
+  // A sheet of several stickers is not 48 mm wide. Until a width is typed, a
+  // sheet is sized to fill what Cricut will Print Then Cut on A4 — 183 mm by
+  // 270 mm, either way up — so the first preview is already at a usable scale.
+  useEffect(() => {
+    if (!loaded || !result || widthTouched.current) return;
+    if (result.stats.stickers < 2 || s.width_mm !== DEFAULT_CUTPATH.width_mm) return;
+    const aspect = loaded.work.w / loaded.work.h;
+    const width = aspect >= 1 ? Math.min(265, 180 * aspect) : Math.min(180, 265 * aspect);
+    widthTouched.current = true;
+    setS((prev) => ({ ...prev, width_mm: Math.round(width) }));
+  }, [loaded, result, s.width_mm]);
 
   const maskOf = useCallback(
     (bits: ArrayBuffer, w: number, h: number): Mask => ({
@@ -272,16 +292,34 @@ export function CutPathPanel() {
       src: { data: Uint8ClampedArray; w: number; h: number },
       polys: Poly[],
       artwork: Poly[],
+      /** Where the image turns transparent, if not at the cut path itself. */
+      clip?: Poly[],
     ): ImageData => {
       const pxPerMm = s.width_mm > 0 ? src.w / s.width_mm : 1;
       const artMask = rasterisePolys(artwork, src.w, src.h, pxPerMm);
-      const cutMask = rasterisePolys(polys, src.w, src.h, pxPerMm);
+      const cutMask = rasterisePolys(clip ?? polys, src.w, src.h, pxPerMm);
+      // Only the border ring is repainted. Anything deeper inside the cut than
+      // the border is the sticker's own interior and keeps its pixels, even
+      // where the artwork mask missed it — a white horse on a white border.
+      const border = result?.stats.target === "artwork" ? result.stats.border_mm : 0;
+      if (border > 0) {
+        const inner = rasterisePolys(offsetPolys(polys, -border * 1.15), src.w, src.h, pxPerMm);
+        for (let i = 0; i < artMask.data.length; i++) {
+          if (!inner.data[i] || artMask.data[i]) continue;
+          // Except what is the colour of a shadow: a painted rim caught inside
+          // the new border is exactly what is being thrown away.
+          const o = i * 4;
+          const lo = Math.min(src.data[o], src.data[o + 1], src.data[o + 2]);
+          const hi = Math.max(src.data[o], src.data[o + 1], src.data[o + 2]);
+          if (!(lo > 170 && hi - lo < 28)) artMask.data[i] = 1;
+        }
+      }
       const pixels = compositeArtwork(src.data, artMask, cutMask, rgb);
       const out = new ImageData(src.w, src.h);
       out.data.set(pixels);
       return out;
     },
-    [s.width_mm, rgb],
+    [s.width_mm, rgb, result],
   );
 
   useEffect(() => {
@@ -381,7 +419,7 @@ export function CutPathPanel() {
     ctx.imageSmoothingQuality = "high";
     ctx.drawImage(loaded.bitmap, 0, 0, w, h);
     const src = { data: ctx.getImageData(0, 0, w, h).data, w, h };
-    ctx.putImageData(composite(src, edge, result.artwork), 0, 0);
+    ctx.putImageData(composite(src, result.polys, result.artwork, edge), 0, 0);
 
     // Trim to the path's own bounds, so the file is the sticker and nothing else.
     const out = document.createElement("canvas");
@@ -395,6 +433,25 @@ export function CutPathPanel() {
     return blob ? { blob, w_mm: b.w, h_mm: b.h } : null;
   }, [loaded, result, composite, s.width_mm]);
 
+  const stem = (loaded?.name ?? "cut-path").replace(/\.[^.]+$/, "").replace(/[^\w-]+/g, "-");
+
+  /** The curves, moved so the path's own top-left is the origin. */
+  const shiftedCurves = useCallback(() => {
+    if (!result) return [];
+    const b = boundsOf(result.polys);
+    const mv = (p: { x: number; y: number }) => ({ x: p.x - b.x, y: p.y - b.y });
+    const ring = (r: (typeof result.curves)[number]["outer"]) =>
+      r.map((c) => ({ p0: mv(c.p0), c1: mv(c.c1), c2: mv(c.c2), p1: mv(c.p1) }));
+    return result.curves.map((p) => ({ outer: ring(p.outer), holes: p.holes.map(ring) }));
+  }, [result]);
+
+  const exportCricutSvg = () => {
+    if (!result) return;
+    const b = boundsOf(result.polys);
+    const svg = toCricutSvg({ polys: [], curves: shiftedCurves(), w_mm: b.w, h_mm: b.h, name: stem });
+    download(new Blob([svg], { type: "image/svg+xml" }), `${stem}-cricut-cut.svg`);
+  };
+
   const shifted = useCallback((): Poly[] => {
     if (!result) return [];
     const b = boundsOf(result.polys);
@@ -402,7 +459,6 @@ export function CutPathPanel() {
     return result.polys.map((p) => ({ outer: move(p.outer), holes: p.holes.map(move) }));
   }, [result]);
 
-  const stem = (loaded?.name ?? "cut-path").replace(/\.[^.]+$/, "").replace(/[^\w-]+/g, "-");
 
   const exportSvg = async () => {
     const png = await renderPng();
@@ -414,6 +470,7 @@ export function CutPathPanel() {
     });
     const svg = toSvg({
       polys: shifted(),
+      curves: shiftedCurves(),
       w_mm: png.w_mm,
       h_mm: png.h_mm,
       name: stem,
@@ -438,24 +495,29 @@ export function CutPathPanel() {
 
   /**
    * The Cricut pair: the print image pulled in by the inset, and the cut line
-   * as a vector shape. Sizes are shown in the panel, because Design Space does
-   * not reliably keep an upload's physical size and both must be set by hand.
+   * as a vector shape. Sizes are shown in the panel so they can be checked in
+   * Design Space — it keeps the SVG's size, but a PNG's is worth confirming.
+   *
+   * The inset follows the border the path was actually built with: on "Keep
+   * its border" there is no added band to hide it in, so it is zero.
    */
   const cricut = useMemo(() => {
     if (!result || result.polys.length === 0) return null;
-    const inset_mm = cricutInset(s.border_mm);
+    const built = result.stats.target === "artwork" ? result.stats.border_mm : 0;
+    const inset_mm = cricutInset(built);
     const printPolys = cricutPrintPolys(result.polys, inset_mm);
     if (printPolys.length === 0) return null;
     return { inset_mm, printPolys, cut: boundsOf(result.polys), print: boundsOf(printPolys) };
-  }, [result, s.border_mm]);
+  }, [result]);
 
   const exportCricut = async () => {
     if (!cricut) return;
     const png = await renderPng(cricut.printPolys);
     if (!png) return;
     download(png.blob, `${stem}-cricut-print.png`);
-    const svg = toCricutCutSvg({
-      polys: shifted(),
+    const svg = toCricutSvg({
+      polys: [],
+      curves: shiftedCurves(),
       w_mm: cricut.cut.w,
       h_mm: cricut.cut.h,
       name: stem,
@@ -474,6 +536,21 @@ export function CutPathPanel() {
   // transparency is thresholded on alpha, everything else is flood filled. The
   // idle one is greyed out rather than left to look broken.
   const usingAlpha = result?.stats.source === "alpha";
+  /** What the cut is following: the setting, or what Auto made of it. */
+  const target = s.target === "auto" ? (result?.stats.target ?? "sticker") : s.target;
+  /** The numbers Auto arrived at, so touching a slider starts from them. */
+  const pinned = (): Partial<CutPathSettings> =>
+    s.target === "auto" && result
+      ? {
+          target: result.stats.target,
+          border_mm: result.stats.border_mm,
+          backgroundTolerance: result.stats.backgroundTolerance,
+          borderAuto: false,
+        }
+      : {};
+  const shownBorder = s.target === "auto" && result ? result.stats.border_mm : s.border_mm;
+  const shownTolerance =
+    s.target === "auto" && result ? result.stats.backgroundTolerance : s.backgroundTolerance;
 
   return (
     <>
@@ -534,7 +611,7 @@ export function CutPathPanel() {
                   // because neither number means anything alone, and together
                   // they are the whole of why a sheet welds into one path.
                   Number.isFinite(result.stats.gap_mm)
-                    ? ` · ${result.stats.gap_mm.toFixed(1)} mm apart, ${result.stats.clearance_mm.toFixed(1)} mm needed`
+                    ? ` · cuts ${result.stats.gap_mm.toFixed(1)} mm apart`
                     : ""
                 }${busy ? " · working…" : ` · ${result.ms} ms`}`
               : "Tracing…"}
@@ -586,6 +663,7 @@ export function CutPathPanel() {
                   onChange={(e) => {
                     const text = e.target.value;
                     setWidthDraft(text);
+                    widthTouched.current = true;
                     // Half-typed values are left on screen but not acted on.
                     // Anything positive commits immediately, so the preview
                     // still tracks the number as it is typed.
@@ -606,7 +684,67 @@ export function CutPathPanel() {
 
             <section>
               <h2>Trace</h2>
-              {!usingAlpha && (
+              <div className="field">
+                <span>
+                  <span>What to cut round</span>
+                </span>
+                <div className="seg">
+                  <button
+                    className={s.target === "auto" ? "active" : ""}
+                    onClick={() => patch({ target: "auto" })}
+                  >
+                    Auto
+                  </button>
+                  <button
+                    className={s.target === "sticker" ? "active" : ""}
+                    onClick={() =>
+                      patch({
+                        ...KEEP_BORDER,
+                        ...(loaded && !usingAlpha
+                          ? {
+                              backgroundTolerance: Math.min(
+                                0.03,
+                                suggestStickerTolerance(loaded.work),
+                              ),
+                            }
+                          : {}),
+                      })
+                    }
+                  >
+                    Keep its border
+                  </button>
+                  <button
+                    className={s.target === "artwork" ? "active" : ""}
+                    onClick={() =>
+                      patch({
+                        target: "artwork",
+                        // Carry on from the border Auto measured, if it did.
+                        border_mm:
+                          result?.stats.target === "artwork"
+                            ? result.stats.border_mm
+                            : DEFAULT_CUTPATH.border_mm,
+                        bladeRadius_mm: KEEP_BORDER.bladeRadius_mm,
+                        backgroundTolerance:
+                          result?.stats.target === "artwork"
+                            ? result.stats.backgroundTolerance
+                            : 0.1,
+                      })
+                    }
+                  >
+                    Rebuild the border
+                  </button>
+                </div>
+                <p className="hint">
+                  {s.target === "auto" && result
+                    ? target === "sticker"
+                      ? "Auto is keeping the border each sticker already has: its edge is clean enough to follow."
+                      : `Auto is rebuilding the border at ${result.stats.border_mm} mm, measured from the painted one: the painted edges run into each other and cannot be followed.`
+                    : target === "sticker"
+                      ? "Cuts on the outer edge of the border the sticker already has. Magenta should cover each whole sticker, border included."
+                      : "Throws the painted border away, finds the artwork inside it and builds a new even border round that."}
+                </p>
+              </div>
+              {!usingAlpha && target === "artwork" && (
                 <div className="field">
                   <span>
                     <span>How to find the artwork</span>
@@ -635,20 +773,24 @@ export function CutPathPanel() {
                 </div>
               )}
 
-              {!usingAlpha && s.route === "paper" && (
+              {!usingAlpha && (s.route === "paper" || target === "sticker") && (
                 <Slider
                   label="Background tolerance"
-                  value={Math.round(s.backgroundTolerance * 100)}
+                  value={Math.round(shownTolerance * 200) / 2}
                   min={0}
                   max={60}
-                  step={1}
+                  step={0.5}
                   unit="%"
-                  onChange={(v) => patch({ backgroundTolerance: v / 100 })}
-                  hint="Raise it until the painted-on border stops being magenta. That is the control that strips it."
+                  onChange={(v) => patch({ ...pinned(), backgroundTolerance: v / 100 })}
+                  hint={
+                    target === "sticker"
+                      ? "Set from the paper's own noise. Lower it if the border is not magenta; raise it if shadows or specks are."
+                      : "Raise it until the painted-on border stops being magenta. That is the control that strips it."
+                  }
                 />
               )}
 
-              {!usingAlpha && s.route === "ink" && (
+              {!usingAlpha && target === "artwork" && s.route === "ink" && (
                 <>
                   <Slider
                     label="Ink threshold"
@@ -720,18 +862,18 @@ export function CutPathPanel() {
               <h2>Cut</h2>
               <Slider
                 label="Border"
-                value={s.border_mm}
+                value={shownBorder}
                 min={-1}
                 max={5}
                 step={0.1}
                 unit=" mm"
-                onChange={(v) => patch({ border_mm: v })}
+                onChange={(v) => patch({ ...pinned(), border_mm: v })}
                 hint="+2 mm is the classic white sticker border. 0 cuts on the artwork edge."
               />
               <button
                 className="ghost"
                 style={{ width: "100%" }}
-                onClick={() => patch({ border_mm: PHOTO_BORDER_MM })}
+                onClick={() => patch({ ...pinned(), border_mm: PHOTO_BORDER_MM })}
               >
                 Use {PHOTO_BORDER_MM} mm for a photo
               </button>
@@ -749,6 +891,16 @@ export function CutPathPanel() {
                 onChange={(v) => patch({ bladeRadius_mm: v })}
                 hint="A blade cannot turn tighter than this, so anything tighter is removed before it tears. Raise to 1.5 mm for thick or laminated stock."
               />
+              <Slider
+                label="Curve smoothness"
+                value={s.curveTolerance_mm}
+                min={0.03}
+                max={0.5}
+                step={0.01}
+                unit=" mm"
+                onChange={(v) => patch({ curveTolerance_mm: v })}
+                hint="How far the cut may drift from the traced edge to stay smooth. Raise it if a painted border wobbles; fewer nodes, calmer cut."
+              />
               <div className="field">
                 <span>
                   <span>Border colour</span>
@@ -765,8 +917,11 @@ export function CutPathPanel() {
 
             <section>
               <h2>Export</h2>
-              <button className="primary" style={{ width: "100%" }} onClick={() => void exportSvg()}>
-                SVG — artwork + cut layer
+              <button className="primary" style={{ width: "100%" }} onClick={() => void exportPng()}>
+                PNG for Cricut Print Then Cut
+              </button>
+              <button style={{ width: "100%", marginTop: 6 }} onClick={exportCricutSvg}>
+                SVG cut lines for Cricut
               </button>
               <button
                 style={{ width: "100%", marginTop: 6 }}
@@ -776,8 +931,8 @@ export function CutPathPanel() {
                 Cricut — print image + cut line
               </button>
               <div className="row" style={{ marginTop: 6 }}>
-                <button className="grow" onClick={() => void exportPng()}>
-                  PNG for Cricut
+                <button className="grow" onClick={() => void exportSvg()}>
+                  SVG artwork + cut
                 </button>
                 <button className="grow" onClick={() => void exportPdf(false)}>
                   PDF trim guide
@@ -797,7 +952,9 @@ export function CutPathPanel() {
                 <strong>Cricut — print image + cut line</strong> gives Design Space the cut
                 path as a shape, so it cuts this path instead of tracing its own.{" "}
                 <strong>PNG for Cricut</strong> is the single-file route: Design Space
-                re-traces the transparent edge, which is quicker but less exact.
+                re-traces the transparent edge, which is quicker but less exact.{" "}
+                <strong>SVG cut lines</strong> is the cut line on its own, for cutting
+                without printing.
               </p>
               <details className="hint">
                 <summary>How to actually cut this</summary>
@@ -818,15 +975,16 @@ export function CutPathPanel() {
                   </li>
                   <li>Upload <code>…-cricut-cut.svg</code>.</li>
                   <li>
-                    Unlock each one's proportions and type the sizes in exactly:
+                    Check the sizes. The cut line arrives at true size, so it should
+                    already read{" "}
+                    {cricut ? <strong>{fmtSize(cricut.cut.w, cricut.cut.h)}</strong> : "the size shown here"}.
+                    Unlock the print image's proportions and type in{" "}
                     {cricut ? (
-                      <>
-                        {" "}cut line <strong>{fmtSize(cricut.cut.w, cricut.cut.h)}</strong>,
-                        print image <strong>{fmtSize(cricut.print.w, cricut.print.h)}</strong>.
-                      </>
+                      <strong>{fmtSize(cricut.print.w, cricut.print.h)}</strong>
                     ) : (
-                      " they are shown here once a path is built."
+                      "the size shown here once a path is built"
                     )}
+                    .
                   </li>
                   <li>
                     Select both → <em>Align → Centre</em>. Put the cut line behind
@@ -842,11 +1000,11 @@ export function CutPathPanel() {
                   </li>
                 </ol>
                 <p>
-                  The print image is {cricut ? `${cricut.inset_mm} mm` : "slightly"} smaller
-                  than the cut line on purpose: it keeps Design Space's own trace of the
-                  image inside the cut line, and the cut line fills that band with the
-                  border colour. This has not yet been checked on a real cut — run one
-                  sticker before a full sheet.
+                  {cricut && cricut.inset_mm === 0
+                    ? "On Keep its border there is no added border to tuck Design Space's own trace into, so the print image is the same size as the cut line and the trace may still nudge the edge in places."
+                    : `The print image is ${cricut ? `${cricut.inset_mm} mm` : "slightly"} smaller than the cut line all round on purpose: it keeps Design Space's own trace of the image inside the cut line, and the cut line fills that band with the border colour.`}{" "}
+                  This has not yet been checked on a real cut — run one sticker before a
+                  full sheet.
                 </p>
                 <p>
                   <strong>Cricut, quick.</strong> Upload <em>PNG for Cricut</em> as a

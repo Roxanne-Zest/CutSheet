@@ -19,6 +19,7 @@
   "dependencies": {
     "clipper-lib": "^6.4.2",
     "d3-contour": "^4.0.2",
+    "fit-curve": "^0.2.0",
     "idb": "^8.0.3",
     "pdf-lib": "^1.17.1",
     "pdfjs-dist": "^4.10.38",

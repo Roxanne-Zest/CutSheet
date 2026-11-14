@@ -577,8 +577,9 @@ const run = async () => {
     } else {
       fail("cut line SVG is not a plain filled shape");
     }
-    const cutW = Number(/width="([\d.]+)mm"/.exec(cutSvg)?.[1] ?? "0");
-    if (near(cutW, six.w_mm, 0.2)) pass(`cut line is ${cutW} mm, matching the readout`);
+    // Design Space reads raw SVG units at 72 to the inch.
+    const cutW = (Number(/width="([\d.]+)"/.exec(cutSvg)?.[1] ?? "0") * 25.4) / 72;
+    if (near(cutW, six.w_mm, 0.2)) pass(`cut line is ${cutW.toFixed(2)} mm, matching the readout`);
     else fail(`cut line is ${cutW} mm but the app reported ${six.w_mm} mm`);
 
     const printWpx = printPng.readUInt32BE(16);
@@ -591,7 +592,7 @@ const run = async () => {
 
     // textContent, not innerText: the instructions sit in a closed <details>.
     const hint = (await page.locator("details.hint").textContent()) ?? "";
-    if (/cut line [\d.]+ × [\d.]+ mm/.test(hint) && /print image [\d.]+ × [\d.]+ mm/.test(hint)) {
+    if (/already read\s*[\d.]+ × [\d.]+ mm/.test(hint) && /type in\s*[\d.]+ × [\d.]+ mm/.test(hint)) {
       pass("the panel tells you both sizes to type into Design Space");
     } else {
       fail("the panel does not show the Design Space sizes");
@@ -600,20 +601,19 @@ const run = async () => {
     // Lay the two on one canvas exactly as Align → Centre would, at 300 dpi.
     const stray = await page.evaluate(
       async ([svgText, pngB64]) => {
-        const PX_PER_MM = 300 / 25.4;
+        const PX_PER_UNIT = 300 / 72;
         const m = /viewBox="0 0 ([\d.]+) ([\d.]+)"/.exec(svgText);
-        const vw = Number(m[1]);
-        const vh = Number(m[2]);
-        const d = /<path d="([^"]+)"/.exec(svgText)[1];
-        const W = Math.round(vw * PX_PER_MM);
-        const H = Math.round(vh * PX_PER_MM);
+        const W = Math.round(Number(m[1]) * PX_PER_UNIT);
+        const H = Math.round(Number(m[2]) * PX_PER_UNIT);
 
         const cut = document.createElement("canvas");
         cut.width = W;
         cut.height = H;
         const cc = cut.getContext("2d");
-        cc.scale(PX_PER_MM, PX_PER_MM);
-        cc.fill(new Path2D(d), "evenodd");
+        cc.scale(PX_PER_UNIT, PX_PER_UNIT);
+        for (const [, d] of svgText.matchAll(/<path id="cut-\d+" d="([^"]+)"/g)) {
+          cc.fill(new Path2D(d), "evenodd");
+        }
         const cutA = cc.getImageData(0, 0, W, H).data;
 
         const img = new Image();

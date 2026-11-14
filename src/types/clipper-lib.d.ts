@@ -30,7 +30,22 @@ declare module "clipper-lib" {
     Clear(): void;
   }
 
+  export const PolyType: { readonly ptSubject: number; readonly ptClip: number };
+  export const ClipType: {
+    readonly ctIntersection: number;
+    readonly ctUnion: number;
+    readonly ctDifference: number;
+    readonly ctXor: number;
+  };
+  export const PolyFillType: { readonly pftEvenOdd: number; readonly pftNonZero: number };
+
+  export class ClipperInstance {
+    AddPaths(paths: Paths, polyType: number, closed: boolean): void;
+    Execute(clipType: number, solution: Paths, subjFill: number, clipFill: number): boolean;
+  }
+
   export const Clipper: {
+    new (): ClipperInstance;
     Orientation(poly: Path): boolean;
     Area(poly: Path): number;
     SimplifyPolygons(polys: Paths, fillType?: number): Paths;
@@ -42,6 +57,9 @@ declare module "clipper-lib" {
     EndType: typeof EndType;
     ClipperOffset: typeof ClipperOffset;
     Clipper: typeof Clipper;
+    PolyType: typeof PolyType;
+    ClipType: typeof ClipType;
+    PolyFillType: typeof PolyFillType;
   };
 
   export default ClipperLib;
