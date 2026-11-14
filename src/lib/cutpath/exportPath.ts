@@ -3,6 +3,7 @@ import type { Poly, Ring } from "./types";
 import { A4, mmToPt, round } from "../units";
 import { INK, MUTED, PRINT_AT_100, RULER_CHECK, drawRuler100, makeDraw } from "../pdfDraw";
 import { boundsOf } from "./trace";
+import { offsetPolys } from "./offset";
 import type { CurvePoly } from "./curves";
 import { curveRingPath, curvesPath } from "./curves";
 
@@ -86,14 +87,14 @@ const CRICUT_UNITS_PER_MM = 72 / 25.4;
  * height attributes say. So this file is one filled path per sticker, in those
  * units, and it lands on the canvas at true size as a ready-made cut layer.
  */
-export const toCricutSvg = (o: ExportInput): string => {
+export const toCricutSvg = (o: ExportInput & { fill?: string }): string => {
   const k = CRICUT_UNITS_PER_MM;
   const w = round(o.w_mm * k, 3);
   const h = round(o.h_mm * k, 3);
   const paths = (o.curves ?? [])
     .map((p, i) => {
       const d = [p.outer, ...p.holes].map((r) => curveRingPath(r, k)).join(" ");
-      return `  <path id="cut-${i + 1}" d="${d}" fill="#000000" fill-rule="evenodd" stroke="none" />`;
+      return `  <path id="cut-${i + 1}" d="${d}" fill="${o.fill ?? "#000000"}" fill-rule="evenodd" stroke="none" />`;
     })
     .join("\n");
   return `<?xml version="1.0" encoding="UTF-8"?>
@@ -221,3 +222,36 @@ export const pngPixelSize = (
 
 /** Bounds check used by the UI and by the tests, so both agree what "fits" is. */
 export const pathBounds = boundsOf;
+
+/**
+ * The Cricut pair — so Design Space never has to trace anything.
+ *
+ * Handing Design Space a PNG means it rebuilds the cut line from the alpha edge
+ * with its own tracer, which smooths and simplifies, and that re-trace is where
+ * the accuracy goes. So the path goes over as what it already is: a vector
+ * shape. The user puts the shape behind the print image and flattens the two,
+ * and a flattened Print Then Cut layer cuts round its outer outline — which is
+ * the shape, provided the image never pokes out past it.
+ *
+ * That proviso is what the inset is for. Design Space still traces the image's
+ * own edge when it is uploaded, and its trace can bulge out a fraction past the
+ * true edge, especially into concave notches. Pulling the image's transparent
+ * edge in by a small margin keeps any such bulge inside the vector shape, so the
+ * outer outline is the shape and nothing else. The band between the two is
+ * printed by the shape itself, in the border colour, so nothing shows.
+ *
+ * The shape is `toCricutSvg` filled in the border colour rather than black, so
+ * the band it prints is indistinguishable from the border around it.
+ *
+ * Half the border, capped, so the image keeps most of its border and the margin
+ * stays well clear of the artwork. No border, no inset: there is no band of
+ * border colour to hide it in, and a sliver would show at the edge.
+ */
+export const CRICUT_INSET_MAX_MM = 0.75;
+
+export const cricutInset = (border_mm: number): number =>
+  border_mm > 0 ? round(Math.min(CRICUT_INSET_MAX_MM, border_mm / 2), 3) : 0;
+
+/** The print image's outline: the cut path pulled in by the inset. */
+export const cricutPrintPolys = (polys: Poly[], inset_mm: number): Poly[] =>
+  inset_mm > 0 ? offsetPolys(polys, -inset_mm) : polys;
