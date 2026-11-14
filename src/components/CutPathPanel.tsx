@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { DEFAULT_CUTPATH, PHOTO_BORDER_MM } from "../lib/cutpath/types";
+import { DEFAULT_CUTPATH, KEEP_BORDER, PHOTO_BORDER_MM } from "../lib/cutpath/types";
 import type { CutPathSettings, Mask, Poly } from "../lib/cutpath/types";
 import { rasterisePolys, compositeArtwork } from "../lib/cutpath/composite";
 import type { Rgb } from "../lib/cutpath/composite";
 import { boundsOf } from "../lib/cutpath/trace";
-import { toPdf, toSvg } from "../lib/cutpath/exportPath";
+import { toCricutSvg, toPdf, toSvg } from "../lib/cutpath/exportPath";
+import { hasUsefulAlpha, suggestStickerTolerance } from "../lib/cutpath/mask";
 import { MM_PER_INCH } from "../lib/units";
 import type { CutPathRequest, CutPathResponse } from "../workers/cutpath.worker";
 
@@ -206,6 +207,17 @@ export function CutPathPanel() {
     setError(null);
     try {
       const img = await readImage(file);
+      // Start by keeping the border the sticker already has. On a file with
+      // transparency that is the alpha edge; on an opaque one the flood has to
+      // stop at the painted rim, so its tolerance is set from the paper's own
+      // noise rather than left at a default that floods through it.
+      setS((prev) => ({
+        ...prev,
+        ...KEEP_BORDER,
+        ...(hasUsefulAlpha(img.work)
+          ? {}
+          : { backgroundTolerance: suggestStickerTolerance(img.work) }),
+      }));
       setLoaded(img);
       setResult(null);
     } catch (e) {
@@ -376,6 +388,25 @@ export function CutPathPanel() {
     return blob ? { blob, w_mm: b.w, h_mm: b.h } : null;
   }, [loaded, result, composite, s.width_mm]);
 
+  const stem = (loaded?.name ?? "cut-path").replace(/\.[^.]+$/, "").replace(/[^\w-]+/g, "-");
+
+  /** The curves, moved so the path's own top-left is the origin. */
+  const shiftedCurves = useCallback(() => {
+    if (!result) return [];
+    const b = boundsOf(result.polys);
+    const mv = (p: { x: number; y: number }) => ({ x: p.x - b.x, y: p.y - b.y });
+    const ring = (r: (typeof result.curves)[number]["outer"]) =>
+      r.map((c) => ({ p0: mv(c.p0), c1: mv(c.c1), c2: mv(c.c2), p1: mv(c.p1) }));
+    return result.curves.map((p) => ({ outer: ring(p.outer), holes: p.holes.map(ring) }));
+  }, [result]);
+
+  const exportCricutSvg = () => {
+    if (!result) return;
+    const b = boundsOf(result.polys);
+    const svg = toCricutSvg({ polys: [], curves: shiftedCurves(), w_mm: b.w, h_mm: b.h, name: stem });
+    download(new Blob([svg], { type: "image/svg+xml" }), `${stem}-cricut-cut.svg`);
+  };
+
   const shifted = useCallback((): Poly[] => {
     if (!result) return [];
     const b = boundsOf(result.polys);
@@ -383,7 +414,6 @@ export function CutPathPanel() {
     return result.polys.map((p) => ({ outer: move(p.outer), holes: p.holes.map(move) }));
   }, [result]);
 
-  const stem = (loaded?.name ?? "cut-path").replace(/\.[^.]+$/, "").replace(/[^\w-]+/g, "-");
 
   const exportSvg = async () => {
     const png = await renderPng();
@@ -395,6 +425,7 @@ export function CutPathPanel() {
     });
     const svg = toSvg({
       polys: shifted(),
+      curves: shiftedCurves(),
       w_mm: png.w_mm,
       h_mm: png.h_mm,
       name: stem,
@@ -559,7 +590,45 @@ export function CutPathPanel() {
 
             <section>
               <h2>Trace</h2>
-              {!usingAlpha && (
+              <div className="field">
+                <span>
+                  <span>What to cut round</span>
+                </span>
+                <div className="seg">
+                  <button
+                    className={s.target === "sticker" ? "active" : ""}
+                    onClick={() =>
+                      patch({
+                        ...KEEP_BORDER,
+                        ...(loaded && !usingAlpha
+                          ? { backgroundTolerance: suggestStickerTolerance(loaded.work) }
+                          : {}),
+                      })
+                    }
+                  >
+                    Keep its border
+                  </button>
+                  <button
+                    className={s.target === "artwork" ? "active" : ""}
+                    onClick={() =>
+                      patch({
+                        target: "artwork",
+                        border_mm: DEFAULT_CUTPATH.border_mm,
+                        bladeRadius_mm: DEFAULT_CUTPATH.bladeRadius_mm,
+                        backgroundTolerance: DEFAULT_CUTPATH.backgroundTolerance,
+                      })
+                    }
+                  >
+                    Rebuild the border
+                  </button>
+                </div>
+                <p className="hint">
+                  {s.target === "sticker"
+                    ? "Cuts on the outer edge of the border the sticker already has. Magenta should cover each whole sticker, border included."
+                    : "Throws the painted border away, finds the artwork inside it and builds a new even border round that."}
+                </p>
+              </div>
+              {!usingAlpha && s.target === "artwork" && (
                 <div className="field">
                   <span>
                     <span>How to find the artwork</span>
@@ -588,20 +657,24 @@ export function CutPathPanel() {
                 </div>
               )}
 
-              {!usingAlpha && s.route === "paper" && (
+              {!usingAlpha && (s.route === "paper" || s.target === "sticker") && (
                 <Slider
                   label="Background tolerance"
-                  value={Math.round(s.backgroundTolerance * 100)}
+                  value={Math.round(s.backgroundTolerance * 200) / 2}
                   min={0}
                   max={60}
-                  step={1}
+                  step={0.5}
                   unit="%"
                   onChange={(v) => patch({ backgroundTolerance: v / 100 })}
-                  hint="Raise it until the painted-on border stops being magenta. That is the control that strips it."
+                  hint={
+                    s.target === "sticker"
+                      ? "Set from the paper's own noise. Lower it if the border is not magenta; raise it if shadows or specks are."
+                      : "Raise it until the painted-on border stops being magenta. That is the control that strips it."
+                  }
                 />
               )}
 
-              {!usingAlpha && s.route === "ink" && (
+              {!usingAlpha && s.target === "artwork" && s.route === "ink" && (
                 <>
                   <Slider
                     label="Ink threshold"
@@ -702,6 +775,16 @@ export function CutPathPanel() {
                 onChange={(v) => patch({ bladeRadius_mm: v })}
                 hint="A blade cannot turn tighter than this, so anything tighter is removed before it tears. Raise to 1.5 mm for thick or laminated stock."
               />
+              <Slider
+                label="Curve smoothness"
+                value={s.curveTolerance_mm}
+                min={0.03}
+                max={0.5}
+                step={0.01}
+                unit=" mm"
+                onChange={(v) => patch({ curveTolerance_mm: v })}
+                hint="How far the cut may drift from the traced edge to stay smooth. Raise it if a painted border wobbles; fewer nodes, calmer cut."
+              />
               <div className="field">
                 <span>
                   <span>Border colour</span>
@@ -718,12 +801,15 @@ export function CutPathPanel() {
 
             <section>
               <h2>Export</h2>
-              <button className="primary" style={{ width: "100%" }} onClick={() => void exportSvg()}>
-                SVG — artwork + cut layer
+              <button className="primary" style={{ width: "100%" }} onClick={() => void exportPng()}>
+                PNG for Cricut Print Then Cut
+              </button>
+              <button style={{ width: "100%", marginTop: 6 }} onClick={exportCricutSvg}>
+                SVG cut lines for Cricut
               </button>
               <div className="row" style={{ marginTop: 6 }}>
-                <button className="grow" onClick={() => void exportPng()}>
-                  PNG for Cricut
+                <button className="grow" onClick={() => void exportSvg()}>
+                  SVG artwork + cut
                 </button>
                 <button className="grow" onClick={() => void exportPdf(false)}>
                   PDF trim guide

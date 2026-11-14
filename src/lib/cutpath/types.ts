@@ -32,7 +32,17 @@ export type Poly = { outer: Ring; holes: Ring[] };
  */
 export type MaskRoute = "paper" | "ink";
 
+/**
+ * What the cut should follow.
+ *
+ * `sticker` keeps the border that is already in the artwork and cuts on its
+ * outer edge — the right answer whenever the border is clean enough to keep.
+ * `artwork` throws that border away and builds a new one.
+ */
+export type CutTarget = "sticker" | "artwork";
+
 export type CutPathSettings = {
+  target: CutTarget;
   route: MaskRoute;
   /** How far from the corner colour still counts as background. 0..1. */
   backgroundTolerance: number;
@@ -50,11 +60,14 @@ export type CutPathSettings = {
   bladeRadius_mm: number;
   /** Cut the hole out of a donut. Almost never what you want. */
   keepHoles: boolean;
+  /** How closely the cut curve hugs the traced edge. Higher is smoother. */
+  curveTolerance_mm: number;
   /** Finished width. Set by the user, never inferred. */
   width_mm: number;
 };
 
 export const DEFAULT_CUTPATH: CutPathSettings = {
+  target: "artwork",
   route: "paper",
   backgroundTolerance: 0.12,
   inkThreshold: 0.12,
@@ -64,6 +77,7 @@ export const DEFAULT_CUTPATH: CutPathSettings = {
   border_mm: 2,
   bladeRadius_mm: 1,
   keepHoles: false,
+  curveTolerance_mm: 0.08,
   width_mm: 48,
 };
 
@@ -73,8 +87,15 @@ export const DEFAULT_CUTPATH: CutPathSettings = {
  */
 export const PHOTO_BORDER_MM = -0.5;
 
-/** Under 400 nodes per sticker, or the plotter stutters and the cut jitters. */
-export const NODE_BUDGET = 400;
+/** Curve nodes per sticker. Past this the plotter stutters and the cut jitters. */
+export const NODE_BUDGET = 250;
+
+/** The border and width that suit a sticker whose own border is being kept. */
+export const KEEP_BORDER: Pick<CutPathSettings, "target" | "border_mm" | "bladeRadius_mm"> = {
+  target: "sticker",
+  border_mm: 0,
+  bladeRadius_mm: 0.5,
+};
 
 export type CutPathStats = {
   stickers: number;
@@ -98,8 +119,13 @@ export type CutPathStats = {
 };
 
 export type CutPathResult = {
-  /** The final cut path, in millimetres, origin at the artwork's top-left. */
+  /**
+   * The final cut path, in millimetres, origin at the artwork's top-left —
+   * the curves flattened finely, so what is previewed is what is cut.
+   */
   polys: Poly[];
+  /** The same path as cubic Beziers. This is what the vector exports write. */
+  curves: import("./curves").CurvePoly[];
   /** The artwork boundary before offsetting, for the on-screen overlay. */
   artwork: Poly[];
   mask: Mask;

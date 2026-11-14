@@ -144,7 +144,8 @@ describe("the pipeline end to end", () => {
     // filled pixel at each edge — a whole pixel wider per gap, and constant
     // whatever the smoothing is set to.
     expect(r.stats.gap_mm).toBeCloseTo(8.5, 1);
-    expect(r.stats.clearance_mm).toBe(5);
+    // Twice the 1.5 mm border; the blade radius no longer reaches across.
+    expect(r.stats.clearance_mm).toBe(3);
   });
 
   it("says nothing about crowding for a single sticker", () => {
@@ -154,9 +155,9 @@ describe("the pipeline end to end", () => {
   });
 
   it("warns before the weld, when the border is nearly too big", () => {
-    // Gap is 8 mm; a 2.5 mm border at a 1 mm blade needs 7 mm. It survives,
-    // but the next nudge of the slider is the one that welds the sheet.
-    const r = runCutPath(sheetOfSix(), settings({ width_mm: 180, border_mm: 2.5 }));
+    // Gap is 8.5 mm; a 3.5 mm border needs 7 mm. It survives, but the next
+    // nudge of the slider is the one that welds the sheet.
+    const r = runCutPath(sheetOfSix(), settings({ width_mm: 180, border_mm: 3.5 }));
     expect(r.stats.stickers).toBe(6);
     expect(r.stats.warnings.join(" ")).toMatch(/^Close:|Close:/);
   });
@@ -196,10 +197,11 @@ describe("the pipeline end to end", () => {
     // an arc. Checking the budget at the trace stage would let a compliant
     // trace leave here as a path the plotter stutters on.
     const r = runCutPath(stickerWithFakeBorder(400), settings({ border_mm: 3 }));
+    // Counted in curve anchors, which is what the plotter is actually sent.
     expect(r.stats.nodes).toBe(
-      r.polys.reduce((n, p) => n + p.outer.length + p.holes.reduce((k, h) => k + h.length, 0), 0),
+      r.curves.reduce((n, p) => n + p.outer.length + p.holes.reduce((k, h) => k + h.length, 0), 0),
     );
-    expect(r.stats.nodes).toBeLessThanOrEqual(400);
+    expect(r.stats.nodes).toBeLessThanOrEqual(250);
     // And the border it reports is the border it drew.
     const distances = r.artwork[0].outer.map((p) => distanceToPolys(p, r.polys));
     expect(Math.min(...distances)).toBeGreaterThan(2.7);
@@ -380,5 +382,34 @@ describe("P7 — export", () => {
   it("sizes the Cricut PNG at the stated resolution", () => {
     expect(pngPixelSize(25.4, 50.8, 300)).toEqual({ w: 300, h: 600 });
     expect(pngPixelSize(48, 48, 300).w).toBe(567);
+  });
+});
+
+describe("the cut line is a curve", () => {
+  it("stays within a tenth of a millimetre of a true circle, on few nodes", () => {
+    // The regression this guards: a round sticker simplified to straight lines
+    // until it fitted a node budget, and cut as a jagged polygon.
+    const w = 400;
+    const data = new Uint8ClampedArray(w * w * 4);
+    for (let y = 0; y < w; y++) {
+      for (let x = 0; x < w; x++) {
+        const inside = Math.hypot(x + 0.5 - 200, y + 0.5 - 200) <= 150;
+        data.set(inside ? [200, 30, 90, 255] : [0, 0, 0, 0], (y * w + x) * 4);
+      }
+    }
+    const r = runCutPath(
+      { data, w, h: w },
+      { ...DEFAULT_CUTPATH, target: "sticker", border_mm: 0, bladeRadius_mm: 0.5, width_mm: 80 },
+    );
+    expect(r.stats.stickers).toBe(1);
+    expect(r.stats.nodes).toBeLessThan(40);
+    const radii = r.polys[0].outer.map((p) => Math.hypot(p.x - 40, p.y - 40));
+    expect(Math.max(...radii) - Math.min(...radii)).toBeLessThan(0.2);
+    expect(Math.abs(radii[0] - 30)).toBeLessThan(0.15);
+  });
+
+  it("keeps close neighbours apart whatever the blade radius", () => {
+    const r = runCutPath(sheetOfSix(), settings({ width_mm: 60, border_mm: 0, bladeRadius_mm: 1.5 }));
+    expect(r.stats.stickers).toBe(6);
   });
 });

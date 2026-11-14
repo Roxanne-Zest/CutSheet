@@ -18,9 +18,13 @@ import type { Bounds } from "./trace";
  * left the count vanished or merged.
  */
 
-/** Clearance a shape needs on each side before it touches its neighbour. */
-export const reachOf = (border_mm: number, bladeRadius_mm: number): number =>
-  Math.max(0, border_mm) + Math.max(0, bladeRadius_mm);
+/**
+ * How far one shape grows towards its neighbour.
+ *
+ * Only the border counts. The blade-radius pass rounds each shape on its own,
+ * so it never bridges two of them however close they sit.
+ */
+export const reachOf = (border_mm: number, _bladeRadius_mm = 0): number => Math.max(0, border_mm);
 
 /**
  * The gap two shapes need between them to stay separate.

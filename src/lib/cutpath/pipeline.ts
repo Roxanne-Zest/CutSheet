@@ -2,8 +2,9 @@ import type { CutPathResult, CutPathSettings, Poly } from "./types";
 import { buildMask } from "./mask";
 import type { Rgba } from "./mask";
 import { cleanMask } from "./clean";
-import { boundsOf, countNodes, scalePolys, traceMask } from "./trace";
-import { simplifyToBudget } from "./simplify";
+import { boundsOf, scalePolys, traceSmooth } from "./trace";
+import { simplifyPolys } from "./simplify";
+import { fitPolys, flattenPolys } from "./curves";
 import { buildBorder } from "./offset";
 import { classifyLoss, clearanceNeeded, minGap } from "./gaps";
 
@@ -33,6 +34,9 @@ export const normalise = (polys: Poly[]): { polys: Poly[]; dx: number; dy: numbe
  * the image holds a page of them.
  */
 const IMPLAUSIBLE_GAP_MM = 1;
+
+/** Thinning tolerance for the raw trace: under a twentieth of a millimetre. */
+const TRACE_TOLERANCE_MM = 0.03;
 
 /** Spacing a real sheet is laid out with, used only to suggest a width. */
 const PLAUSIBLE_GAP_MM = 3;
@@ -79,16 +83,16 @@ export const crowdingWarnings = (
 
   const out: string[] = [];
   const loss = classifyLoss(before, after);
-  const reach = `a ${s.border_mm} mm border at a ${s.bladeRadius_mm} mm blade radius needs ${clearance_mm.toFixed(1)} mm between shapes`;
+  const reach = `a ${s.border_mm} mm border needs ${clearance_mm.toFixed(1)} mm between shapes`;
 
   if (loss.merged > 1) {
     // The largest border that still clears the measured gap, rounded down so
     // the number offered actually works rather than landing on the boundary.
-    const safeBorder = Math.floor((gap_mm / 2 - s.bladeRadius_mm) * 10) / 10;
+    const safeBorder = Math.floor((gap_mm / 2) * 10) / 10;
     const fix =
-      safeBorder >= 0
-        ? `Drop the border to ${safeBorder.toFixed(1)} mm, or reduce the blade radius.`
-        : `Even a 0 mm border will not clear it at this blade radius — reduce the blade radius below ${(gap_mm / 2).toFixed(1)} mm, or check Width is the width of the whole sheet.`;
+      safeBorder > 0
+        ? `Drop the border to ${safeBorder.toFixed(1)} mm.`
+        : `They are already touching in the artwork — check Width is the width of the whole sheet.`;
     out.push(
       `${loss.merged} shapes merged into ${loss.mergedInto}: ${reach}, and the closest two on this sheet are ${gap_mm.toFixed(1)} mm apart. ${fix}`,
     );
@@ -96,7 +100,7 @@ export const crowdingWarnings = (
 
   if (loss.vanished > 0) {
     out.push(
-      `${loss.vanished} shape${loss.vanished === 1 ? "" : "s"} disappeared: too small to survive a ${s.border_mm} mm border at a ${s.bladeRadius_mm} mm blade radius.`,
+      `${loss.vanished} shape${loss.vanished === 1 ? "" : "s"} disappeared: too small to survive a ${s.border_mm} mm border and a ${s.bladeRadius_mm} mm blade radius.`,
     );
   }
 
@@ -123,10 +127,12 @@ export const runCutPath = (img: Rgba, s: CutPathSettings): CutPathResult => {
   warnings.push(...cleaned.warnings);
 
   // 3 — trace, in pixels
-  const tracedPx = traceMask(cleaned.mask);
+  // Sub-pixel, so no pixel staircase ever reaches the simplifier.
+  const tracedPx = traceSmooth(cleaned.mask, Math.max(1, Math.round(s.smoothing)));
   if (tracedPx.length === 0) {
     return {
       polys: [],
+      curves: [],
       artwork: [],
       mask: cleaned.mask,
       stats: {
@@ -150,9 +156,10 @@ export const runCutPath = (img: Rgba, s: CutPathSettings): CutPathResult => {
   // downstream pipeline works in real units and the border really is 2 mm.
   const mmPerPx = s.width_mm / img.w;
 
-  // 4 — simplify, in millimetres so the tolerance means something physical
-  const simplified = simplifyToBudget(scalePolys(tracedPx, mmPerPx));
-  warnings.push(...simplified.warnings);
+  // 4 — thin the trace, in millimetres. Only far enough to drop redundant
+  // points: nothing here is allowed to move the outline, because every corner
+  // a coarse simplify invents is a corner the blade then has to cut.
+  const simplified = { polys: simplifyPolys(scalePolys(tracedPx, mmPerPx), TRACE_TOLERANCE_MM, 0) };
 
   // How close the shapes are, and how much room the border wants. Measured on
   // the traced artwork, so it is known before the offset gets a chance to weld
@@ -160,34 +167,36 @@ export const runCutPath = (img: Rgba, s: CutPathSettings): CutPathResult => {
   const gap = minGap(simplified.polys);
   const clearance = clearanceNeeded(s.border_mm, s.bladeRadius_mm);
 
-  warnings.push(...widthWarnings(simplified.polys, s.width_mm, gap.min_mm));
+  // Not when the painted border is kept: those borders are drawn nearly
+  // touching on a real sheet, so a small gap says nothing about the width.
+  if (s.target !== "sticker") {
+    warnings.push(...widthWarnings(simplified.polys, s.width_mm, gap.min_mm));
+  }
 
   // 5 and 6 — border, then make it cuttable
   const border = buildBorder(simplified.polys, s);
   warnings.push(...border.warnings);
   warnings.push(...crowdingWarnings(simplified.polys, border.polys, gap.min_mm, clearance, s));
 
-  // The budget has to be enforced on the path that actually reaches the
-  // plotter. Offsetting and the cuttability pass both add nodes — every round
-  // join is an arc — so checking at stage 4 would let a 400-node trace leave
-  // here as a 700-node cut. No Chaikin this time: the offset arcs are already
-  // smooth, and rounding them again would pull the border in off its 2 mm.
-  const budgeted = simplifyToBudget(border.polys, {
-    tolerance: simplified.tolerance,
-    rounds: 0,
-  });
-  warnings.push(...budgeted.warnings);
+  // 7 — curves. The budget is enforced here, on the path that actually
+  // reaches the plotter, and it is spent on Bezier anchors rather than straight
+  // segments: thinning a smooth outline to a few hundred straight lines is what
+  // turned a round sticker into a jagged one.
+  const fitted = fitPolys(border.polys, { tolerance: s.curveTolerance_mm });
+  warnings.push(...fitted.warnings);
+  const budgeted = { polys: flattenPolys(fitted.curves), tolerance: fitted.tolerance };
 
   const b = boundsOf(budgeted.polys.length ? budgeted.polys : simplified.polys);
 
   return {
     polys: budgeted.polys,
+    curves: fitted.curves,
     artwork: simplified.polys,
     mask: cleaned.mask,
     stats: {
       stickers: budgeted.polys.length,
       source: masked.source,
-      nodes: countNodes(budgeted.polys),
+      nodes: fitted.nodes,
       w_mm: b.w,
       h_mm: b.h,
       tolerance_mm: budgeted.tolerance,

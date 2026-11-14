@@ -68,23 +68,21 @@ describe("measuring the gap", () => {
 
 describe("clearance", () => {
   it("is twice the reach, because both sides grow", () => {
-    expect(clearanceNeeded(2, 1)).toBe(6);
-    expect(clearanceNeeded(0, 1)).toBe(2);
+    expect(clearanceNeeded(2, 1)).toBe(4);
+    expect(clearanceNeeded(0, 1)).toBe(0);
     expect(clearanceNeeded(0, 0)).toBe(0);
   });
 
   it("ignores a negative border rather than counting it as room gained", () => {
-    // A negative border shrinks the shape, but the blade close still reaches
-    // outward, so it cannot be subtracted from what the blade needs.
-    expect(clearanceNeeded(-1, 1)).toBe(2);
+    expect(clearanceNeeded(-1, 1)).toBe(0);
   });
 
   it("predicts the merge the border stage actually performs", () => {
     for (const width_mm of [48, 100, 150, 210]) {
       const polys = sheet(width_mm);
       const gap = minGap(polys).min_mm;
-      const clearance = clearanceNeeded(0, 1);
-      const out = buildBorder(polys, { border_mm: 0, bladeRadius_mm: 1, keepHoles: false });
+      const clearance = clearanceNeeded(1, 1);
+      const out = buildBorder(polys, { border_mm: 1, bladeRadius_mm: 1, keepHoles: false });
       const merged = out.polys.length < polys.length;
       expect(merged).toBe(gap < clearance);
     }

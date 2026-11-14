@@ -1,6 +1,7 @@
 import { runCutPath } from "../lib/cutpath/pipeline";
 import { rasterisePolys } from "../lib/cutpath/composite";
 import type { CutPathSettings, CutPathStats, Mask, Poly } from "../lib/cutpath/types";
+import type { CurvePoly } from "../lib/cutpath/curves";
 
 /**
  * P8 — the pipeline off the main thread.
@@ -22,6 +23,8 @@ export type CutPathRequest = {
 export type CutPathResponse = {
   id: number;
   polys: Poly[];
+  /** The cut path as cubic Beziers, for the vector exports. */
+  curves: CurvePoly[];
   artwork: Poly[];
   /** Artwork mask, for the magenta overlay. */
   maskBits: ArrayBuffer;
@@ -62,6 +65,7 @@ self.onmessage = (e: MessageEvent<CutPathRequest>) => {
   const response: CutPathResponse = {
     id,
     polys: result.polys,
+    curves: result.curves,
     artwork: result.artwork,
     maskBits,
     cutBits,

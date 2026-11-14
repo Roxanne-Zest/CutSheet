@@ -3,6 +3,8 @@ import type { Poly, Ring } from "./types";
 import { A4, mmToPt, round } from "../units";
 import { INK, MUTED, PRINT_AT_100, RULER_CHECK, drawRuler100, makeDraw } from "../pdfDraw";
 import { boundsOf } from "./trace";
+import type { CurvePoly } from "./curves";
+import { curveRingPath, curvesPath } from "./curves";
 
 /**
  * P7 — getting the path out.
@@ -36,6 +38,8 @@ export const polysPath = (polys: Poly[]): string =>
 export type ExportInput = {
   /** The cut path, in millimetres, top-left at the origin. */
   polys: Poly[];
+  /** The same path as curves. Written in preference to `polys` when present. */
+  curves?: CurvePoly[];
   /** The finished artwork as a data URI, already composited with its border. */
   artworkDataUri?: string;
   /** Size of the artwork in millimetres. */
@@ -65,8 +69,37 @@ export const toSvg = (o: ExportInput): string => {
   </g>
   <g id="cut" data-cut-path="true"
      fill="none" stroke="#ff0000" stroke-width="0.1" fill-rule="evenodd">
-    <path d="${polysPath(o.polys)}" />
+    <path d="${o.curves?.length ? curvesPath(o.curves) : polysPath(o.polys)}" />
   </g>
+</svg>
+`;
+};
+
+/** Design Space reads SVG user units at 72 to the inch and ignores the rest. */
+const CRICUT_UNITS_PER_MM = 72 / 25.4;
+
+/**
+ * SVG for Cricut Design Space — the cut line and nothing else.
+ *
+ * Design Space does not take an SVG with a picture in it, and it sizes an SVG
+ * from its raw coordinates at 72 units to the inch whatever the width and
+ * height attributes say. So this file is one filled path per sticker, in those
+ * units, and it lands on the canvas at true size as a ready-made cut layer.
+ */
+export const toCricutSvg = (o: ExportInput): string => {
+  const k = CRICUT_UNITS_PER_MM;
+  const w = round(o.w_mm * k, 3);
+  const h = round(o.h_mm * k, 3);
+  const paths = (o.curves ?? [])
+    .map((p, i) => {
+      const d = [p.outer, ...p.holes].map((r) => curveRingPath(r, k)).join(" ");
+      return `  <path id="cut-${i + 1}" d="${d}" fill="#000000" fill-rule="evenodd" stroke="none" />`;
+    })
+    .join("\n");
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">
+  <title>${o.name} — cut lines, ${round(o.w_mm, 1)} x ${round(o.h_mm, 1)} mm</title>
+${paths}
 </svg>
 `;
 };

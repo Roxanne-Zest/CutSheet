@@ -1,4 +1,4 @@
-import type { Mask, MaskRoute } from "./types";
+import type { CutTarget, Mask, MaskRoute } from "./types";
 import { newMask } from "./types";
 import { DEFAULT_INK, amputationRatio, inkMask } from "./ink";
 
@@ -137,6 +137,34 @@ export const maskFromBackground = (img: Rgba, tolerance: number): Mask => {
   return out;
 };
 
+/**
+ * A tolerance for keeping a painted border: just above the paper's own noise.
+ *
+ * The outer edge of a painted sticker border is often the faintest line in the
+ * image — a rim a few levels darker than paper that is itself nearly white. A
+ * tolerance wide enough to be comfortable floods straight through it. So this
+ * measures how much the paper varies along the image edge and sits just above
+ * that, which is the widest setting that still stops at the rim.
+ */
+export const suggestStickerTolerance = (img: Rgba): number => {
+  const { w, h, data } = img;
+  const [r, g, b] = cornerColour(img);
+  const d: number[] = [];
+  const sample = (x: number, y: number) => d.push(rgbDistance(data, (y * w + x) * 4, r, g, b));
+  for (let x = 0; x < w; x += 2) {
+    sample(x, 0);
+    sample(x, h - 1);
+  }
+  for (let y = 0; y < h; y += 2) {
+    sample(0, y);
+    sample(w - 1, y);
+  }
+  d.sort((p, q) => p - q);
+  const noise = d[Math.floor((d.length - 1) * 0.95)] ?? 0;
+  const t = (noise * 2 + 3) / MAX_RGB_DIST;
+  return Math.round(Math.min(0.08, Math.max(0.015, t)) * 200) / 200;
+};
+
 export type MaskReport = {
   mask: Mask;
   /** Which route was taken, so the UI can show the control that matters. */
@@ -157,6 +185,7 @@ const AMPUTATION_LIMIT = 0.04;
 export const buildMask = (
   img: Rgba,
   o: {
+    target?: CutTarget;
     route?: MaskRoute;
     edgeThreshold: number;
     backgroundTolerance: number;
@@ -169,7 +198,7 @@ export const buildMask = (
 
   const useAlpha = hasUsefulAlpha(filtered);
   const route: MaskReport["source"] =
-    useAlpha ? "alpha" : o.route === "ink" ? "ink" : "background";
+    useAlpha ? "alpha" : o.target !== "sticker" && o.route === "ink" ? "ink" : "background";
 
   const mask =
     route === "alpha"
@@ -209,7 +238,9 @@ export const buildMask = (
   // The failure that has no other symptom: on a sheet whose artwork shares a
   // tone with its paper, a workable-looking tolerance quietly amputates the pale
   // parts of every sticker and the count never changes. Measure it directly.
-  if (route === "background" && coverage > 0.01 && coverage < 0.985) {
+  // Not when the border is being kept: there the flood is meant to stop at the
+  // sticker's edge, and the pale interior is recovered by filling the outline.
+  if (route === "background" && o.target !== "sticker" && coverage > 0.01 && coverage < 0.985) {
     const tight = maskFromBackground(filtered, Math.min(TIGHT_TOLERANCE, o.backgroundTolerance));
     const lost = amputationRatio(mask, tight);
     if (lost > AMPUTATION_LIMIT) {
