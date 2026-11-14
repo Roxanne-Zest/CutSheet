@@ -149,7 +149,7 @@ export type CleanReport = {
 
 export const cleanMask = (
   m: Mask,
-  o: { smoothing: number; keepHoles: boolean; target?: "sticker" | "artwork" },
+  o: { smoothing: number; keepHoles: boolean; target?: "sticker" | "artwork"; minFraction?: number },
 ): CleanReport => {
   const r = Math.max(0, o.smoothing);
   // Keeping a painted border: the flood stopped at a thin rim and the sticker
@@ -157,7 +157,45 @@ export const cleanMask = (
   // opening, or the opening erases the rim and the sticker with it.
   const base = o.target === "sticker" && !o.keepHoles ? fillHoles(m) : m;
   const smoothed = r > 0 ? close(open(base, r), r) : base;
-  const { mask: filtered, dropped } = dropSmallComponents(smoothed);
+  const { mask: filtered, dropped } = dropSmallComponents(smoothed, o.minFraction);
   const filled = o.keepHoles ? filtered : fillHoles(filtered);
   return { mask: filled, dropped, warnings: detectMerged(filled) };
+};
+
+/**
+ * Drop small components that are the colour of a shadow.
+ *
+ * On a sheet, size alone cannot tell debris from detail: the star beside a
+ * dragon is smaller than a scrap of drop shadow caught between two borders.
+ * Colour can. Painted rims and shadows are pale and grey; the things worth
+ * keeping are not. Large components are never touched.
+ */
+export const dropPaleDebris = (
+  m: Mask,
+  img: { data: Uint8ClampedArray },
+  fraction = MIN_COMPONENT_FRACTION,
+): Mask => {
+  const { labels, areas, count } = labelComponents(m);
+  if (count < 2) return m;
+  const floor = Math.max(...areas.slice(1)) * fraction;
+  const low = new Float64Array(count + 1);
+  const spread = new Float64Array(count + 1);
+  for (let i = 0; i < labels.length; i++) {
+    const l = labels[i];
+    if (!l || areas[l] >= floor) continue;
+    const o = i * 4;
+    const r = img.data[o];
+    const g = img.data[o + 1];
+    const b = img.data[o + 2];
+    low[l] += Math.min(r, g, b);
+    spread[l] += Math.max(r, g, b) - Math.min(r, g, b);
+  }
+  const out = newMask(m.w, m.h);
+  for (let i = 0; i < labels.length; i++) {
+    const l = labels[i];
+    if (!l) continue;
+    const pale = areas[l] < floor && low[l] / areas[l] > 170 && spread[l] / areas[l] < 28;
+    out.data[i] = pale ? 0 : 1;
+  }
+  return out;
 };

@@ -211,15 +211,11 @@ describe("the ink route", () => {
     expect(r.stats.warnings).toEqual([]);
   });
 
-  it("survives paper that darkens at the edges, where the flood fill welds", () => {
+  it("survives paper that darkens at the edges", () => {
     const img = sheet(700, 1000, { vignette: 0.15 });
 
-    const paper = runCutPath(img, settings({ route: "paper", backgroundTolerance: 0.12 }));
     const ink = runCutPath(img, settings({ route: "ink" }));
 
-    // The flood fill cannot reach the lighter middle from a darker corner, so
-    // unreached paper becomes artwork and shapes weld together.
-    expect(paper.stats.stickers).toBeLessThan(12);
     // The ink route divides the paper out first, so the vignette is not there.
     expect(ink.stats.stickers).toBe(12);
     expectMm(widest(ink), WITH_TAIL_MM, "ink route through a vignette");

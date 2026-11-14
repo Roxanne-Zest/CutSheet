@@ -105,6 +105,26 @@ export const offsetPolys = (polys: Poly[], delta_mm: number): Poly[] => {
   return regroup(out);
 };
 
+const allPaths = (polys: Poly[]): ClipperPoint[][] =>
+  polys.flatMap((p) => [toClipper(p.outer), ...p.holes.map(toClipper)]);
+
+const boolean = (a: Poly[], b: Poly[], type: number): Poly[] => {
+  const c = new ClipperLib.Clipper();
+  c.AddPaths(allPaths(a), ClipperLib.PolyType.ptSubject, true);
+  c.AddPaths(allPaths(b), ClipperLib.PolyType.ptClip, true);
+  const out: ClipperPoint[][] = [];
+  c.Execute(type, out, ClipperLib.PolyFillType.pftNonZero, ClipperLib.PolyFillType.pftNonZero);
+  return regroup(out);
+};
+
+/** The part of `a` that lies inside `b`. */
+export const intersectPolys = (a: Poly[], b: Poly[]): Poly[] =>
+  a.length && b.length ? boolean(a, b, ClipperLib.ClipType.ctIntersection) : [];
+
+/** Everything covered by either set, as one set of non-overlapping shapes. */
+export const unionPolys = (a: Poly[], b: Poly[]): Poly[] =>
+  boolean(a, b, ClipperLib.ClipType.ctUnion);
+
 /**
  * Vector closing: grow by r, shrink by r.
  *

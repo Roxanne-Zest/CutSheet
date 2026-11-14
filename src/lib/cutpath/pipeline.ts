@@ -1,12 +1,12 @@
-import type { CutPathResult, CutPathSettings, Poly } from "./types";
-import { buildMask } from "./mask";
+import type { CutPathResult, CutPathSettings, CutTarget, Mask, Poly } from "./types";
+import { buildMask, fingerprint, flattenOnWhite, hasCleanAlpha, hasUsefulAlpha, medianFilter3, suggestArtworkTolerance, suggestStickerTolerance } from "./mask";
 import type { Rgba } from "./mask";
-import { cleanMask } from "./clean";
-import { boundsOf, scalePolys, traceSmooth } from "./trace";
+import { cleanMask, dropPaleDebris } from "./clean";
+import { boundsOf, ringArea, scalePolys, traceSmooth } from "./trace";
 import { simplifyPolys } from "./simplify";
 import { fitPolys, flattenPolys } from "./curves";
-import { buildBorder } from "./offset";
-import { classifyLoss, clearanceNeeded, minGap } from "./gaps";
+import { KERF_MM, buildSheetBorder, groupPieces, measureBorderPx } from "./sheet";
+import { classifyLoss, minGap } from "./gaps";
 
 /**
  * The seven stages, in order, with nothing between them but data.
@@ -115,93 +115,204 @@ export const crowdingWarnings = (
   return out;
 };
 
+/** Pieces this fraction of the painted border apart are one sticker. */
+const GROUP_REACH = 0.92;
+
+const stageCache = new Map<
+  string,
+  { mask: Mask; px: Poly[]; source: "alpha" | "background" | "ink"; warnings: string[] }
+>();
+
+type Stage = { mask: Mask; pieces: Poly[]; source: "alpha" | "background" | "ink"; warnings: string[] };
+
+const empty = (
+  mask: Mask,
+  source: Stage["source"],
+  target: CutTarget,
+  s: CutPathSettings,
+  warnings: string[],
+): CutPathResult => ({
+  polys: [],
+  curves: [],
+  artwork: [],
+  mask,
+  stats: {
+    stickers: 0,
+    target,
+    border_mm: s.border_mm,
+    backgroundTolerance: s.backgroundTolerance,
+    source,
+    nodes: 0,
+    w_mm: 0,
+    h_mm: 0,
+    tolerance_mm: 0,
+    gap_mm: Infinity,
+    clearance_mm: KERF_MM,
+    warnings: [
+      ...warnings,
+      "No artwork found. Adjust Background tolerance until the magenta overlay covers the sticker and nothing else.",
+    ],
+  },
+});
+
+/**
+ * Is the sticker outline trustworthy, or has it run neighbours together?
+ *
+ * Keeping a painted border depends on that border having an edge the flood can
+ * stop at. On many sheets it does not: soft shadows bridge the gaps and several
+ * stickers come back as one. Two tells, either of which is enough — one outline
+ * far larger than the rest, or clearly fewer outlines than there are stickers'
+ * worth of artwork.
+ */
+export const outlineIsSound = (outlines: Poly[], stickers: number): boolean => {
+  if (outlines.length === 0) return false;
+  if (outlines.length < stickers * 0.7) return false;
+  if (outlines.length >= 3) {
+    const areas = outlines.map((p) => ringArea(p.outer)).sort((x, y) => x - y);
+    if (areas[areas.length - 1] > areas[areas.length >> 1] * 2.5) return false;
+  }
+  return true;
+};
+
 export const runCutPath = (img: Rgba, s: CutPathSettings): CutPathResult => {
   const warnings: string[] = [];
-
-  // 1 — mask
-  const masked = buildMask(img, s);
-  warnings.push(...masked.warnings);
-
-  // 2 — clean
-  const cleaned = cleanMask(masked.mask, s);
-  warnings.push(...cleaned.warnings);
-
-  // 3 — trace, in pixels
-  // Sub-pixel, so no pixel staircase ever reaches the simplifier.
-  const tracedPx = traceSmooth(cleaned.mask, Math.max(1, Math.round(s.smoothing)));
-  if (tracedPx.length === 0) {
-    return {
-      polys: [],
-      curves: [],
-      artwork: [],
-      mask: cleaned.mask,
-      stats: {
-        stickers: 0,
-        source: masked.source,
-        nodes: 0,
-        w_mm: 0,
-        h_mm: 0,
-        tolerance_mm: 0,
-        gap_mm: Infinity,
-        clearance_mm: clearanceNeeded(s.border_mm, s.bladeRadius_mm),
-        warnings: [
-          ...warnings,
-          "No artwork found. Adjust Background tolerance until the magenta overlay covers the sticker and nothing else.",
-        ],
-      },
-    };
-  }
-
-  // Pixels to millimetres. The width is what the user typed, so the whole
-  // downstream pipeline works in real units and the border really is 2 mm.
   const mmPerPx = s.width_mm / img.w;
+  const cleanAlpha = hasUsefulAlpha(img) && hasCleanAlpha(img);
+  const opaque = cleanAlpha ? img : hasUsefulAlpha(img) ? flattenOnWhite(img) : img;
 
-  // 4 — thin the trace, in millimetres. Only far enough to drop redundant
-  // points: nothing here is allowed to move the outline, because every corner
-  // a coarse simplify invents is a corner the blade then has to cut.
-  const simplified = { polys: simplifyPolys(scalePolys(tracedPx, mmPerPx), TRACE_TOLERANCE_MM, 0) };
+  // 1 to 4 — mask, clean, trace sub-pixel, thin. Run once per question asked
+  // of the image: where is the whole sticker, and where is the artwork in it.
+  const id = fingerprint(img);
+  const stage = (target: CutTarget, backgroundTolerance: number): Stage => {
+    // Kept in pixels and cached: border, blade, curve and width changes all
+    // leave the mask alone, and it is most of the work.
+    const key = [id, target, backgroundTolerance, s.route, s.inkThreshold, s.edgeSensitivity, s.edgeThreshold, s.smoothing, s.keepHoles].join("|");
+    let hit = stageCache.get(key);
+    if (!hit) {
+      const masked = buildMask(img, { ...s, target, backgroundTolerance });
+      // Artwork on a sheet keeps its small pieces — the heart, the star — and
+      // loses only what is the colour of a shadow. Size alone cannot tell them
+      // apart; strays that end up belonging to no sticker are dropped later.
+      const sheetArt = target === "artwork" && masked.source === "background";
+      const cleaned = cleanMask(masked.mask, {
+        ...s,
+        target,
+        ...(sheetArt ? { minFraction: 0.0005 } : {}),
+      });
+      if (sheetArt) cleaned.mask = dropPaleDebris(cleaned.mask, opaque);
+      hit = {
+        mask: cleaned.mask,
+        px: traceSmooth(cleaned.mask, Math.max(1, Math.round(s.smoothing))),
+        source: masked.source,
+        warnings: [...masked.warnings, ...cleaned.warnings],
+      };
+      if (stageCache.size >= 6) stageCache.delete(stageCache.keys().next().value as string);
+      stageCache.set(key, hit);
+    }
+    return {
+      mask: hit.mask,
+      pieces: simplifyPolys(scalePolys(hit.px, mmPerPx), TRACE_TOLERANCE_MM, 0),
+      source: hit.source,
+      warnings: hit.warnings,
+    };
+  };
 
-  // How close the shapes are, and how much room the border wants. Measured on
-  // the traced artwork, so it is known before the offset gets a chance to weld
-  // anything, and reported either way.
-  const gap = minGap(simplified.polys);
-  const clearance = clearanceNeeded(s.border_mm, s.bladeRadius_mm);
+  const outlineTolerance =
+    s.target === "sticker"
+      ? s.backgroundTolerance
+      : // Capped: on noisy paper a tolerance wide enough to clear the noise
+        // also clears the rim, and the outline it returns is just the artwork.
+        Math.min(0.03, suggestStickerTolerance(opaque));
+  const artworkTolerance =
+    s.target === "artwork"
+      ? s.backgroundTolerance
+      : s.target === "auto" && !cleanAlpha
+        ? suggestArtworkTolerance(medianFilter3(opaque))
+        : 0;
 
-  // Not when the painted border is kept: those borders are drawn nearly
-  // touching on a real sheet, so a small gap says nothing about the width.
-  if (s.target !== "sticker") {
-    warnings.push(...widthWarnings(simplified.polys, s.width_mm, gap.min_mm));
+  let target: CutTarget;
+  let used: Stage;
+  let border_mm = s.border_mm;
+  let groupReach_mm = 0;
+
+  if (s.target === "sticker" || (s.target === "auto" && cleanAlpha)) {
+    target = "sticker";
+    used = stage("sticker", outlineTolerance);
+    if (s.target === "auto") border_mm = 0;
+  } else {
+    const art = stage("artwork", artworkTolerance);
+    const outline = cleanAlpha ? art : stage("sticker", outlineTolerance);
+    // The painted border's own width, read off the image.
+    const painted_mm = cleanAlpha ? 0 : measureBorderPx(outline.mask, art.mask, opaque) * mmPerPx;
+    const reach = painted_mm > 0 ? painted_mm * GROUP_REACH : Math.max(0, s.border_mm);
+
+    if (s.target === "auto" && outlineIsSound(outline.pieces, groupPieces(art.pieces, reach).length)) {
+      target = "sticker";
+      used = outline;
+      border_mm = 0;
+    } else {
+      target = "artwork";
+      used = art;
+      groupReach_mm = reach;
+      if ((s.target === "auto" || s.borderAuto) && painted_mm > 0) {
+        border_mm = Math.round(painted_mm * 10) / 10;
+      }
+    }
+  }
+  // Warnings about the mask only make sense for a tolerance somebody chose.
+  if (s.target !== "auto") warnings.push(...used.warnings);
+
+  const backgroundTolerance = target === "sticker" ? outlineTolerance : artworkTolerance;
+  if (used.pieces.length === 0) {
+    return empty(used.mask, used.source, target, { ...s, border_mm, backgroundTolerance }, warnings);
   }
 
-  // 5 and 6 — border, then make it cuttable
-  const border = buildBorder(simplified.polys, s);
-  warnings.push(...border.warnings);
-  warnings.push(...crowdingWarnings(simplified.polys, border.polys, gap.min_mm, clearance, s));
+  // 5 and 6 — gather the pieces into stickers, give each its border inside its
+  // own territory, and make it cuttable. Nothing here can weld two stickers.
+  const sheet = buildSheetBorder(used.pieces, {
+    border_mm,
+    groupReach_mm,
+    bladeRadius_mm: s.bladeRadius_mm,
+    keepHoles: s.keepHoles,
+    w_mm: s.width_mm,
+    h_mm: img.h * mmPerPx,
+  });
+  if (sheet.polys.length === 0) {
+    warnings.push(
+      "Nothing survived the border. A negative border larger than the artwork leaves no path to cut.",
+    );
+  }
+  if (sheet.narrowed > 0) {
+    warnings.push(
+      `${sheet.narrowed} sticker${sheet.narrowed === 1 ? " is" : "s are"} too close to a neighbour for a full ${border_mm} mm border, so the border narrows where they face each other and ${KERF_MM} mm is left between the cuts.`,
+    );
+  }
 
-  // 7 — curves. The budget is enforced here, on the path that actually
-  // reaches the plotter, and it is spent on Bezier anchors rather than straight
+  // 7 — curves. The budget is spent on Bezier anchors rather than straight
   // segments: thinning a smooth outline to a few hundred straight lines is what
   // turned a round sticker into a jagged one.
-  const fitted = fitPolys(border.polys, { tolerance: s.curveTolerance_mm });
+  const fitted = fitPolys(sheet.polys, { tolerance: s.curveTolerance_mm });
   warnings.push(...fitted.warnings);
-  const budgeted = { polys: flattenPolys(fitted.curves), tolerance: fitted.tolerance };
+  const polys = flattenPolys(fitted.curves);
 
-  const b = boundsOf(budgeted.polys.length ? budgeted.polys : simplified.polys);
-
+  const b = boundsOf(polys.length ? polys : used.pieces);
   return {
-    polys: budgeted.polys,
+    polys,
     curves: fitted.curves,
-    artwork: simplified.polys,
-    mask: cleaned.mask,
+    artwork: used.pieces,
+    mask: used.mask,
     stats: {
-      stickers: budgeted.polys.length,
-      source: masked.source,
+      stickers: polys.length,
+      target,
+      border_mm,
+      backgroundTolerance,
+      source: used.source,
       nodes: fitted.nodes,
       w_mm: b.w,
       h_mm: b.h,
-      tolerance_mm: budgeted.tolerance,
-      gap_mm: gap.min_mm,
-      clearance_mm: clearance,
+      tolerance_mm: fitted.tolerance,
+      gap_mm: minGap(polys).min_mm,
+      clearance_mm: KERF_MM,
       warnings,
     },
   };

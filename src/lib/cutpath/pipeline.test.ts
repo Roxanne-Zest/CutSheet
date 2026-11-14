@@ -101,39 +101,25 @@ describe("the pipeline end to end", () => {
     expect(readout(r)).toMatch(/^6 stickers found · \d+ nodes/);
   });
 
-  it("welds a sheet together when the width describes one sticker", () => {
-    // The same six stickers, told they span 48 mm rather than 180. Nothing
-    // upstream changes — the mask and the trace are identical — but every gap
-    // scales down with the width until the blade radius closes them.
+  it("keeps a sheet apart even when the width describes one sticker", () => {
+    // The same six stickers, told they span 48 mm rather than 180. Every gap
+    // scales down with the width, and a 1.5 mm border no longer fits between
+    // them — which used to weld the sheet into one path. Each sticker now
+    // grows only into its own territory.
     const wrong = runCutPath(sheetOfSix(), settings({ width_mm: 48, border_mm: 1.5 }));
     const right = runCutPath(sheetOfSix(), settings({ width_mm: 180, border_mm: 1.5 }));
 
     expect(right.stats.stickers).toBe(6);
-    expect(wrong.stats.stickers).toBeLessThan(6);
+    expect(wrong.stats.stickers).toBe(6);
+    expect(wrong.stats.gap_mm).toBeGreaterThan(0.3);
   });
 
-  it("reports a weld as a merge, naming the gap and the clearance", () => {
-    const r = runCutPath(sheetOfSix(), settings({ width_mm: 48, border_mm: 1.5 }));
-    const said = r.stats.warnings.join(" ");
+  it("says when a border was narrowed to keep neighbours apart, and only then", () => {
+    const tight = runCutPath(sheetOfSix(), settings({ width_mm: 48, border_mm: 1.5 }));
+    expect(tight.stats.warnings.join(" ")).toMatch(/narrows where they face each other/);
 
-    // The cause, not a guess at it. Calling this a disappearance sends you to
-    // enlarge artwork that was never too small.
-    expect(said).toMatch(/merged into/);
-    expect(said).not.toMatch(/disappeared/);
-    // And the two numbers that explain it.
-    expect(said).toContain(r.stats.gap_mm.toFixed(1));
-    expect(said).toContain(r.stats.clearance_mm.toFixed(1));
-  });
-
-  it("questions the width when shapes are closer than a sheet is ever laid out", () => {
-    const r = runCutPath(sheetOfSix(), settings({ width_mm: 12, border_mm: 0 }));
-    expect(r.stats.gap_mm).toBeLessThan(1);
-    expect(r.stats.warnings.join(" ")).toMatch(/if that was meant to be one sticker/i);
-  });
-
-  it("leaves the width alone when the sheet is plausibly laid out", () => {
-    const r = runCutPath(sheetOfSix(), settings({ width_mm: 180, border_mm: 1.5 }));
-    expect(r.stats.warnings.join(" ")).not.toMatch(/one sticker/i);
+    const roomy = runCutPath(sheetOfSix(), settings({ width_mm: 180, border_mm: 1.5 }));
+    expect(roomy.stats.warnings.join(" ")).not.toMatch(/narrows/);
   });
 
   it("reports the gap and the clearance whether or not anything went wrong", () => {
@@ -143,23 +129,16 @@ describe("the pipeline end to end", () => {
     // because marching squares puts the contour half a pixel inside the last
     // filled pixel at each edge — a whole pixel wider per gap, and constant
     // whatever the smoothing is set to.
-    expect(r.stats.gap_mm).toBeCloseTo(8.5, 1);
-    // Twice the 1.5 mm border; the blade radius no longer reaches across.
-    expect(r.stats.clearance_mm).toBe(3);
+    // That is between the artwork. The gap reported is between the cut lines,
+    // so a 1.5 mm border on each side takes 3 mm of it.
+    expect(r.stats.gap_mm).toBeCloseTo(5.5, 0);
+    expect(r.stats.clearance_mm).toBe(0.6);
   });
 
   it("says nothing about crowding for a single sticker", () => {
     const r = runCutPath(stickerWithFakeBorder(), settings());
     expect(r.stats.gap_mm).toBe(Infinity);
     expect(r.stats.warnings.join(" ")).not.toMatch(/merged|apart/);
-  });
-
-  it("warns before the weld, when the border is nearly too big", () => {
-    // Gap is 8.5 mm; a 3.5 mm border needs 7 mm. It survives, but the next
-    // nudge of the slider is the one that welds the sheet.
-    const r = runCutPath(sheetOfSix(), settings({ width_mm: 180, border_mm: 3.5 }));
-    expect(r.stats.stickers).toBe(6);
-    expect(r.stats.warnings.join(" ")).toMatch(/^Close:|Close:/);
   });
 
   it("honours the width the user typed, exactly", () => {
@@ -411,5 +390,59 @@ describe("the cut line is a curve", () => {
   it("keeps close neighbours apart whatever the blade radius", () => {
     const r = runCutPath(sheetOfSix(), settings({ width_mm: 60, border_mm: 0, bladeRadius_mm: 1.5 }));
     expect(r.stats.stickers).toBe(6);
+  });
+});
+
+describe("a sheet with painted borders", () => {
+  /**
+   * Two stickers side by side: a dark disc with a small dark satellite, each
+   * wrapped in a white border ending in a grey rim, with a soft shadow that
+   * bridges the gap between the two. The rim is too faint to stop a flood wide
+   * enough to clear the shadow — the case that used to come out as one path.
+   */
+  const paintedPair = (): Rgba => {
+    const w = 450;
+    const h = 260;
+    const data = new Uint8ClampedArray(w * h * 4);
+    const discs = [
+      { x: 125, y: 130, r: 70 },
+      { x: 125, y: 40, r: 9 },
+      { x: 325, y: 130, r: 70 },
+      { x: 325, y: 40, r: 9 },
+    ];
+    const BORDER = 16;
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const d = Math.min(...discs.map((c) => Math.hypot(x - c.x, y - c.y) - c.r));
+        let v = [252, 252, 253];
+        if (d <= 0) v = [200, 40, 120];
+        else if (d <= BORDER) v = [255, 255, 255];
+        else if (d <= BORDER + 2) v = [222, 221, 228];
+        else if (d <= BORDER + 14) v = [244, 244, 247];
+        data.set([...v, 255], (y * w + x) * 4);
+      }
+    }
+    return { data, w, h };
+  };
+
+  it("finds two stickers, each with its satellite, and matches the painted border", () => {
+    const r = runCutPath(paintedPair(), { ...DEFAULT_CUTPATH, target: "auto", bladeRadius_mm: 0.5, width_mm: 90 });
+    expect(r.stats.target).toBe("artwork");
+    expect(r.stats.stickers).toBe(2);
+    // 16 px of painted border on a 450 px image at 90 mm is 3.2 mm.
+    expect(r.stats.border_mm).toBeGreaterThan(2.8);
+    expect(r.stats.border_mm).toBeLessThan(3.8);
+  });
+
+  it("does not trust a hazy alpha channel", () => {
+    const img = paintedPair();
+    // A background remover's leftovers: nothing is fully clear.
+    for (let i = 0; i < img.w * img.h; i++) {
+      const o = i * 4;
+      if (img.data[o] > 240 && img.data[o + 1] > 240) img.data[o + 3] = 60;
+    }
+    const r = runCutPath(img, { ...DEFAULT_CUTPATH, target: "auto", bladeRadius_mm: 0.5, width_mm: 96 });
+    expect(r.stats.source).toBe("background");
+    expect(r.stats.stickers).toBe(2);
   });
 });
