@@ -541,6 +541,109 @@ const run = async () => {
   }
   if (png.includes(Buffer.from("PNG"))) pass("Cricut PNG is a real PNG");
 
+  // ---- The Cricut pair: the cut line as a shape, the print image inset by
+  // 0.75 mm (half the 2 mm border). Then do what Design Space is told to: size
+  // both from the panel, centre one on the other, and look for any visible
+  // print pixel that lands outside the cut shape.
+  const pair = new Map();
+  const pairDone = new Promise((resolve) => {
+    const onDl = async (dl) => {
+      pair.set(dl.suggestedFilename(), dl);
+      if (pair.size === 2) {
+        page.off("download", onDl);
+        resolve();
+      }
+    };
+    page.on("download", onDl);
+  });
+  await page.click('button:has-text("Cricut — print image + cut line")');
+  await Promise.race([pairDone, page.waitForTimeout(60000)]);
+  const pairNames = [...pair.keys()];
+  const printName = pairNames.find((n) => n.endsWith("-cricut-print.png"));
+  const cutName = pairNames.find((n) => n.endsWith("-cricut-cut.svg"));
+  if (printName && cutName) pass(`Cricut pair downloads ${printName} and ${cutName}`);
+  else fail(`Cricut pair downloaded ${JSON.stringify(pairNames)}`);
+
+  if (printName && cutName) {
+    const printPath = join(OUT, "cutpath-cricut-print.png");
+    const cutPath = join(OUT, "cutpath-cricut-cut.svg");
+    await pair.get(printName).saveAs(printPath);
+    await pair.get(cutName).saveAs(cutPath);
+    const cutSvg = await readFile(cutPath, "utf8");
+    const printPng = await readFile(printPath);
+
+    if (!/<image/.test(cutSvg) && /fill="#ffffff"/.test(cutSvg) && /stroke="none"/.test(cutSvg)) {
+      pass("cut line is a white-filled shape with no embedded image");
+    } else {
+      fail("cut line SVG is not a plain filled shape");
+    }
+    const cutW = Number(/width="([\d.]+)mm"/.exec(cutSvg)?.[1] ?? "0");
+    if (near(cutW, six.w_mm, 0.2)) pass(`cut line is ${cutW} mm, matching the readout`);
+    else fail(`cut line is ${cutW} mm but the app reported ${six.w_mm} mm`);
+
+    const printWpx = printPng.readUInt32BE(16);
+    const printWmm = (printWpx / 300) * 25.4;
+    if (near(cutW - printWmm, 1.5, 0.2)) {
+      pass(`print image is ${printWmm.toFixed(2)} mm — 0.75 mm inside the cut line each side`);
+    } else {
+      fail(`print image is ${printWmm.toFixed(2)} mm against a ${cutW} mm cut line; expected 1.5 mm less`);
+    }
+
+    // textContent, not innerText: the instructions sit in a closed <details>.
+    const hint = (await page.locator("details.hint").textContent()) ?? "";
+    if (/cut line [\d.]+ × [\d.]+ mm/.test(hint) && /print image [\d.]+ × [\d.]+ mm/.test(hint)) {
+      pass("the panel tells you both sizes to type into Design Space");
+    } else {
+      fail("the panel does not show the Design Space sizes");
+    }
+
+    // Lay the two on one canvas exactly as Align → Centre would, at 300 dpi.
+    const stray = await page.evaluate(
+      async ([svgText, pngB64]) => {
+        const PX_PER_MM = 300 / 25.4;
+        const m = /viewBox="0 0 ([\d.]+) ([\d.]+)"/.exec(svgText);
+        const vw = Number(m[1]);
+        const vh = Number(m[2]);
+        const d = /<path d="([^"]+)"/.exec(svgText)[1];
+        const W = Math.round(vw * PX_PER_MM);
+        const H = Math.round(vh * PX_PER_MM);
+
+        const cut = document.createElement("canvas");
+        cut.width = W;
+        cut.height = H;
+        const cc = cut.getContext("2d");
+        cc.scale(PX_PER_MM, PX_PER_MM);
+        cc.fill(new Path2D(d), "evenodd");
+        const cutA = cc.getImageData(0, 0, W, H).data;
+
+        const img = new Image();
+        img.src = `data:image/png;base64,${pngB64}`;
+        await img.decode();
+        const pr = document.createElement("canvas");
+        pr.width = W;
+        pr.height = H;
+        const pc = pr.getContext("2d");
+        pc.drawImage(img, Math.round((W - img.width) / 2), Math.round((H - img.height) / 2));
+        const prA = pc.getImageData(0, 0, W, H).data;
+
+        let outside = 0;
+        let visible = 0;
+        for (let i = 3; i < prA.length; i += 4) {
+          if (prA[i] < 128) continue;
+          visible += 1;
+          if (cutA[i] < 128) outside += 1;
+        }
+        return { outside, visible };
+      },
+      [cutSvg, printPng.toString("base64")],
+    );
+    if (stray.visible > 0 && stray.outside === 0) {
+      pass(`centred, all ${stray.visible} visible print pixels sit inside the cut line`);
+    } else {
+      fail(`${stray.outside} of ${stray.visible} print pixels land outside the cut line`);
+    }
+  }
+
   const [pdfDl] = await Promise.all([
     page.waitForEvent("download", { timeout: 60000 }),
     page.click('button:has-text("PDF with Silhouette marks")'),

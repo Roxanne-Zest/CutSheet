@@ -4,7 +4,13 @@ import type { CutPathSettings, Mask, Poly } from "../lib/cutpath/types";
 import { rasterisePolys, compositeArtwork } from "../lib/cutpath/composite";
 import type { Rgb } from "../lib/cutpath/composite";
 import { boundsOf } from "../lib/cutpath/trace";
-import { toPdf, toSvg } from "../lib/cutpath/exportPath";
+import {
+  cricutInset,
+  cricutPrintPolys,
+  toCricutCutSvg,
+  toPdf,
+  toSvg,
+} from "../lib/cutpath/exportPath";
 import { MM_PER_INCH } from "../lib/units";
 import type { CutPathRequest, CutPathResponse } from "../workers/cutpath.worker";
 
@@ -63,6 +69,13 @@ const readImage = async (file: File): Promise<Loaded> => {
     work: { data: work.data, w: work.width, h: work.height },
     bitmap,
   };
+};
+
+/** "52.3 × 40.1 mm (2.06 × 1.58 in)" — Design Space shows one or the other. */
+const fmtSize = (w_mm: number, h_mm: number): string => {
+  const mm = (v: number) => (Math.round(v * 10) / 10).toFixed(1);
+  const inch = (v: number) => (v / MM_PER_INCH).toFixed(3);
+  return `${mm(w_mm)} × ${mm(h_mm)} mm (${inch(w_mm)} × ${inch(h_mm)} in)`;
 };
 
 const download = (blob: Blob, name: string) => {
@@ -341,10 +354,16 @@ export function CutPathPanel() {
     strokeAll("#39d7e8", 1.5);
   }, [loaded, result, composite, s.width_mm, paneWidth]);
 
-  /** Full-resolution artwork as a PNG, cut to the path. */
-  const renderPng = useCallback(async (): Promise<{ blob: Blob; w_mm: number; h_mm: number } | null> => {
+  /**
+   * Full-resolution artwork as a PNG, cut to an outline — the cut path unless
+   * told otherwise. The Cricut pair passes the inset outline instead.
+   */
+  const renderPng = useCallback(async (
+    outline?: Poly[],
+  ): Promise<{ blob: Blob; w_mm: number; h_mm: number } | null> => {
     if (!loaded || !result) return null;
-    const b = boundsOf(result.polys);
+    const edge = outline ?? result.polys;
+    const b = boundsOf(edge);
 
     // Resolution is fixed in pixels-per-millimetre, once, and everything else
     // is derived from it. Deriving a scale from the path bounds and then a
@@ -362,7 +381,7 @@ export function CutPathPanel() {
     ctx.imageSmoothingQuality = "high";
     ctx.drawImage(loaded.bitmap, 0, 0, w, h);
     const src = { data: ctx.getImageData(0, 0, w, h).data, w, h };
-    ctx.putImageData(composite(src, result.polys, result.artwork), 0, 0);
+    ctx.putImageData(composite(src, edge, result.artwork), 0, 0);
 
     // Trim to the path's own bounds, so the file is the sticker and nothing else.
     const out = document.createElement("canvas");
@@ -415,6 +434,34 @@ export function CutPathPanel() {
       artworkPng: new Uint8Array(await png.blob.arrayBuffer()),
     });
     download(new Blob([bytes as BlobPart], { type: "application/pdf" }), `${stem}-cut${registrationMarks ? "-silhouette" : ""}.pdf`);
+  };
+
+  /**
+   * The Cricut pair: the print image pulled in by the inset, and the cut line
+   * as a vector shape. Sizes are shown in the panel, because Design Space does
+   * not reliably keep an upload's physical size and both must be set by hand.
+   */
+  const cricut = useMemo(() => {
+    if (!result || result.polys.length === 0) return null;
+    const inset_mm = cricutInset(s.border_mm);
+    const printPolys = cricutPrintPolys(result.polys, inset_mm);
+    if (printPolys.length === 0) return null;
+    return { inset_mm, printPolys, cut: boundsOf(result.polys), print: boundsOf(printPolys) };
+  }, [result, s.border_mm]);
+
+  const exportCricut = async () => {
+    if (!cricut) return;
+    const png = await renderPng(cricut.printPolys);
+    if (!png) return;
+    download(png.blob, `${stem}-cricut-print.png`);
+    const svg = toCricutCutSvg({
+      polys: shifted(),
+      w_mm: cricut.cut.w,
+      h_mm: cricut.cut.h,
+      name: stem,
+      fill: borderColour,
+    });
+    download(new Blob([svg], { type: "image/svg+xml" }), `${stem}-cricut-cut.svg`);
   };
 
   const exportPng = async () => {
@@ -721,6 +768,13 @@ export function CutPathPanel() {
               <button className="primary" style={{ width: "100%" }} onClick={() => void exportSvg()}>
                 SVG — artwork + cut layer
               </button>
+              <button
+                style={{ width: "100%", marginTop: 6 }}
+                disabled={!cricut}
+                onClick={() => void exportCricut()}
+              >
+                Cricut — print image + cut line
+              </button>
               <div className="row" style={{ marginTop: 6 }}>
                 <button className="grow" onClick={() => void exportPng()}>
                   PNG for Cricut
@@ -740,22 +794,64 @@ export function CutPathPanel() {
                 been verified against a real cut. Test one sheet before trusting them.
               </p>
               <p className="hint">
-                The PNG bakes the path as the alpha boundary, which is what Design Space
-                regenerates its contours from.
+                <strong>Cricut — print image + cut line</strong> gives Design Space the cut
+                path as a shape, so it cuts this path instead of tracing its own.{" "}
+                <strong>PNG for Cricut</strong> is the single-file route: Design Space
+                re-traces the transparent edge, which is quicker but less exact.
               </p>
               <details className="hint">
                 <summary>How to actually cut this</summary>
                 <p>
-                  All three routes are <strong>print then cut</strong>: the printer lays
+                  Every route here is <strong>print then cut</strong>: the printer lays
                   the artwork down, the machine finds the sheet and cuts the path you
                   built here. Print at 100% — no “fit to page”, no scaling — or the
                   millimetres stop being millimetres and the cut lands off the artwork.
                 </p>
                 <p>
-                  <strong>Cricut.</strong> Upload the PNG to Design Space as a Print
-                  Then Cut image. It regenerates the cut line from the transparent
-                  edge, so the path is already baked in — do not add an offset in
-                  Design Space, or you get this border plus another one.
+                  <strong>Cricut, exact.</strong> Export{" "}
+                  <em>Cricut — print image + cut line</em>. You get two files.
+                </p>
+                <ol>
+                  <li>
+                    Upload <code>…-cricut-print.png</code> and choose{" "}
+                    <em>Print Then Cut image</em>. Do not remove any background.
+                  </li>
+                  <li>Upload <code>…-cricut-cut.svg</code>.</li>
+                  <li>
+                    Unlock each one's proportions and type the sizes in exactly:
+                    {cricut ? (
+                      <>
+                        {" "}cut line <strong>{fmtSize(cricut.cut.w, cricut.cut.h)}</strong>,
+                        print image <strong>{fmtSize(cricut.print.w, cricut.print.h)}</strong>.
+                      </>
+                    ) : (
+                      " they are shown here once a path is built."
+                    )}
+                  </li>
+                  <li>
+                    Select both → <em>Align → Centre</em>. Put the cut line behind
+                    (<em>Arrange → Send to Back</em>).
+                  </li>
+                  <li>
+                    Select both → <em>Flatten</em>. It becomes one Print Then Cut layer
+                    that cuts round the cut line's outline.
+                  </li>
+                  <li>
+                    Do not add an offset in Design Space, or you get this border plus
+                    another one.
+                  </li>
+                </ol>
+                <p>
+                  The print image is {cricut ? `${cricut.inset_mm} mm` : "slightly"} smaller
+                  than the cut line on purpose: it keeps Design Space's own trace of the
+                  image inside the cut line, and the cut line fills that band with the
+                  border colour. This has not yet been checked on a real cut — run one
+                  sticker before a full sheet.
+                </p>
+                <p>
+                  <strong>Cricut, quick.</strong> Upload <em>PNG for Cricut</em> as a
+                  Print Then Cut image. Design Space re-traces the cut line from the
+                  transparent edge, so expect it to wander slightly.
                 </p>
                 <p>
                   <strong>Silhouette.</strong> Open the SVG in Studio. The cut layer

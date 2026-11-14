@@ -3,6 +3,7 @@ import type { Poly, Ring } from "./types";
 import { A4, mmToPt, round } from "../units";
 import { INK, MUTED, PRINT_AT_100, RULER_CHECK, drawRuler100, makeDraw } from "../pdfDraw";
 import { boundsOf } from "./trace";
+import { offsetPolys } from "./offset";
 
 /**
  * P7 — getting the path out.
@@ -188,3 +189,63 @@ export const pngPixelSize = (
 
 /** Bounds check used by the UI and by the tests, so both agree what "fits" is. */
 export const pathBounds = boundsOf;
+
+/**
+ * The Cricut pair — so Design Space never has to trace anything.
+ *
+ * Handing Design Space a PNG means it rebuilds the cut line from the alpha edge
+ * with its own tracer, which smooths and simplifies, and that re-trace is where
+ * the accuracy goes. So the path goes over as what it already is: a vector
+ * shape. The user puts the shape behind the print image and flattens the two,
+ * and a flattened Print Then Cut layer cuts round its outer outline — which is
+ * the shape, provided the image never pokes out past it.
+ *
+ * That proviso is what the inset is for. Design Space still traces the image's
+ * own edge when it is uploaded, and its trace can bulge out a fraction past the
+ * true edge, especially into concave notches. Pulling the image's transparent
+ * edge in by a small margin keeps any such bulge inside the vector shape, so the
+ * outer outline is the shape and nothing else. The band between the two is
+ * printed by the shape itself, in the border colour, so nothing shows.
+ *
+ * Half the border, capped, so the image keeps most of its border and the margin
+ * stays well clear of the artwork. No border, no inset: there is no band of
+ * border colour to hide it in, and a sliver would show at the edge.
+ */
+export const CRICUT_INSET_MAX_MM = 0.75;
+
+export const cricutInset = (border_mm: number): number =>
+  border_mm > 0 ? round(Math.min(CRICUT_INSET_MAX_MM, border_mm / 2), 3) : 0;
+
+/** The print image's outline: the cut path pulled in by the inset. */
+export const cricutPrintPolys = (polys: Poly[], inset_mm: number): Poly[] =>
+  inset_mm > 0 ? offsetPolys(polys, -inset_mm) : polys;
+
+export type CricutCutSvgInput = {
+  /** The cut path, in millimetres, top-left at the origin. */
+  polys: Poly[];
+  w_mm: number;
+  h_mm: number;
+  name: string;
+  /** Fill for the shape — the border colour, since it prints in the inset band. */
+  fill: string;
+};
+
+/**
+ * The cut line as a filled shape and nothing else.
+ *
+ * Filled rather than stroked, because Design Space turns a stroked path into a
+ * thin outline and cuts both sides of it. No embedded image either: Design
+ * Space drops raster images from an SVG, which is why the artwork travels as
+ * the separate PNG.
+ */
+export const toCricutCutSvg = (o: CricutCutSvgInput): string => {
+  const w = round(o.w_mm, 4);
+  const h = round(o.h_mm, 4);
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="${w}mm" height="${h}mm" viewBox="0 0 ${w} ${h}">
+  <title>${o.name} — Cut Sheet cut line for Cricut</title>
+  <path d="${polysPath(o.polys)}" fill="${o.fill}" fill-rule="evenodd" stroke="none" />
+</svg>
+`;
+};
